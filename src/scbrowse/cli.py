@@ -17,7 +17,6 @@ Why does this file exist, and why not put this in __main__?
 import argparse
 from functools import wraps
 import logging
-#from copy import copy
 import argparse
 import dash  # pylint: disable=import-error
 from dash.exceptions import PreventUpdate
@@ -35,6 +34,7 @@ from pybedtools import BedTool, Interval
 
 import pandas as pd
 from scregseg.countmatrix import CountMatrix
+import uuid
 
 
 parser = argparse.ArgumentParser(description="single-cell Explorer")
@@ -59,11 +59,7 @@ parser.add_argument(
     help="Port to use for the web app"
 )
 
-#args = parser.parse_args()
 
-#parser = argparse.ArgumentParser(description='Command description.')
-#parser.add_argument('names', metavar='NAME', nargs=argparse.ZERO_OR_MORE,
-#                    help="A name of something.")
 
 ###############
 # data helper functions
@@ -119,7 +115,6 @@ def _highlight(row, rmin, rmax, highlight):
 ##############
 
 def get_locus(regs_):
-    #sregs_ = regs_[regs_.highlight == "inside"]
     if regs_.shape[0] == 0:
         return None
     xmin = regs_.start.min()
@@ -144,8 +139,6 @@ class TrackManager:
         self.locus = get_locus(regs_)
         self.highlight = get_highlight(regs_)
         self.controlprops = controlprops
-        #self.plottype = plottype
-        #self.separated = separated
         self.genes = genes
         self.init_trace()
 
@@ -154,30 +147,11 @@ class TrackManager:
             ntracks = 1
         else:
             ntracks = len(self.tracknames)
-       #     print('not separated')
-
-       #     specs = [[{"rowspan": self.trackheight}]] + [[None]] * (self.trackheight-1) + [[{"rowspan": 1}]]
-
-       #     fig = make_subplots(
-       #         rows=ntracks * self.trackheight + 1,
-       #         cols=1,
-       #         specs=specs,
-       #         shared_xaxes=True,
-       #         vertical_spacing=0.05,
-       #         print_grid=True,
-       #     )
-       # else:
-        #print(' separated')
-        #ntracks = len(self.tracknames)
         specs=[]
         for n in range(ntracks):
             specs += [[{"rowspan": self.trackheight}]]
             specs += [[None]]*(self.trackheight - 1)
         specs += [[{"rowspan": 1}]]
-        #print(specs)
-        #print(len(specs))
-        #specs = [[{"rowspan": ntracks * 3}]] + \
-        #    [[None]] * (ntracks * 3 + 1) + [[{"rowspan": 1}]]
 
         fig = make_subplots(
             rows=ntracks * self.trackheight + 1,
@@ -230,14 +204,6 @@ class TrackManager:
         for trackname in self.tracknames:
             self.extend_trace(fig, self.draw_summary_track(trackname))
             self.next_trace()
-
-        #hl = get_highlight(self.regs_)
-
-        #if selected is None:
-        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
-        #else:
-        #    fig = draw_summary_figure_3(fig, regs_, plottype, "selected")
-        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
 
         title = f"Window: {self.locus[0]}:{self.locus[1]}-{self.locus[2]}"
         if self.highlight is not None:
@@ -411,43 +377,6 @@ def _draw_gene_annotation(fig, genes, chrom, start, end):
             ),
         ]
         return plobjs
-#    else:
-#        return []
-#        fig.add_trace(
-#            go.Scatter(
-#                x=xs,
-#                y=ys,
-#                mode="lines",
-#                fill="toself",
-#                name="Genes",
-#                marker=dict(color="goldenrod"),
-#            ),
-#            row=12,
-#            col=1,
-#        )
-#        fig.add_trace(
-#            go.Scatter(
-#                x=midpoints,
-#                y=[0.5] * len(midpoints),
-#                text=names,
-#                mode="text",
-#                opacity=0.0,
-#                name="Genes",
-#                customdata=rangeannot,
-#                hovertemplate="%{text}<br>%{customdata}",
-#                showlegend=False,
-#            ),
-#            row=12,
-#            col=1,
-#        )
-#        fig.layout["yaxis2"]["showticklabels"] = False
-#        fig.layout["yaxis2"]["showgrid"] = False
-#        fig.layout["yaxis2"]["zeroline"] = False
-#        fig.layout["xaxis2"]["showgrid"] = False
-#        fig.layout["xaxis2"]["zeroline"] = False
-#    else:
-#        fig.layout["xaxis"]["showticklabels"] = True
-#    return fig
 
 def draw_gene_annotation(fig, genes, chrom, start, end):
     wbed = BedTool([Interval(chrom, start, end)])
@@ -492,30 +421,6 @@ def draw_gene_annotation(fig, genes, chrom, start, end):
         rangeannot.append(f"{region.chrom}:{region.start}-{region.end};{region.strand}")
 
     if len(midpoints) > 0:
-    #    plobjs = [
-    #        go.Scatter(
-    #            x=xs,
-    #            y=ys,
-    #            mode="lines",
-    #            fill="toself",
-    #            name="Genes",
-    #            marker=dict(color="goldenrod"),
-    #        ),
-    #        go.Scatter(
-    #            x=midpoints,
-    #            y=[0.5] * len(midpoints),
-    #            text=names,
-    #            mode="text",
-    #            opacity=0.0,
-    #            name="Genes",
-    #            customdata=rangeannot,
-    #            hovertemplate="%{text}<br>%{customdata}",
-    #            showlegend=False,
-    #        ),
-    #    ]
-    #    return plobjs
-    #else:
-    #    return []
         fig.add_trace(
             go.Scatter(
                 x=xs,
@@ -615,12 +520,19 @@ def main(args=None):
     # define layout
     ##############
 
-    app.layout = html.Div(
+    def make_server():
+        session_id = str(uuid.uuid4())
+        print(session_id)
+        return html.Div(
         [
             html.Div(
                 [
                     html.Div(
                         id="dragmode-selector", children="select", style={"display": "none"}
+                    ),
+                    html.Div(
+                        id="session-id", children=session_id,
+                        style={"display": "none"}
                     ),
                     html.Label(html.B("Annotation:")),
                     dcc.Dropdown(
@@ -724,7 +636,7 @@ def main(args=None):
         className="container",
     )
 
-
+    app.layout = make_server
     ############
     # app callbacks
     ############
@@ -868,41 +780,6 @@ def main(args=None):
         trackmanager = TrackManager(regs_, tracknames,
                                     genes, controlprops)
         fig = trackmanager.draw()
-
-        #specs = [[{"rowspan": 11}]] + [[None]] * 10 + [[{"rowspan": 1}]]
-
-        #fig = make_subplots(
-        #    rows=12,
-        #    cols=1,
-        #    specs=specs,
-        #    shared_xaxes=True,
-        #    vertical_spacing=0.01,
-        #    print_grid=True,
-        #)
-
-        #if selected is None:
-        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
-        #else:
-        #    fig = draw_summary_figure_3(fig, regs_, plottype, "selected")
-        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
-
-        #hl = get_highlight(regs_)
-        #title = f"Window: {chrom}:{start}-{end}"
-        #if hl is not None:
-        #    title += f"<br>Highlight: {chrom}:{hl[0]}-{hl[1]}"
-
-        #fig.layout.update(
-        #    dict(title=title, dragmode=dragmode, clickmode="event+select",
-        #         template="plotly_white")
-        #)
-        ##fig.update_layout(clickmode="event+select")
-        ##fig.update_layout(template="plotly_white")
-
-        #fig = draw_highlight(fig, regs_)
-
-        #if genes is not None:
-        #    fig = draw_gene_annotation(fig, genes, chrom, start, end)
-
 
         return fig
 
@@ -1087,19 +964,6 @@ def main(args=None):
         if "dragmode" not in relayout:
             raise PreventUpdate
         return relayout["dragmode"]
-
-    #@app.callback(
-    #    Output(component_id="test-field", component_property="children"),
-    #    [
-#Inp#ut(component_id="scatter-plot", component_property="relayoutData"),
-    #     Input(component_id="scatter-plot", component_property="selectedData"),
-    #     Input(component_id="test-field", component_property="children")
-    #     ],
-    #)
-    #@log_layer
-    #def update_point_selector(selected, data):
-    #    print(selected, data)
-    #    return 'hallo'
 
 
     ############
