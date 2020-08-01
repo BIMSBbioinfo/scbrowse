@@ -30,7 +30,7 @@ from scipy.stats import fisher_exact
 
 from scipy.sparse import diags
 import numpy as np
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 from pybedtools import BedTool, Interval
 
 import pandas as pd
@@ -65,6 +65,494 @@ parser.add_argument(
 #parser.add_argument('names', metavar='NAME', nargs=argparse.ZERO_OR_MORE,
 #                    help="A name of something.")
 
+###############
+# data helper functions
+###############
+
+def log_layer(fn):
+    @wraps(fn)
+    def _log_wrapper(*args, **kwargs):
+        ctx = dash.callback_context
+        def _extr(props):
+            return {k: props[k] for k in props \
+                    if k not in ['points',
+                             'scatter-plot.selectedData',
+                             'summary-plot.selectedData']}
+
+        logging.debug(f'wrap:callb:'
+                      f'outputs:{_extr(ctx.outputs_list)}:'
+                      f'inputs:{_extr(ctx.inputs)}:'
+                      f'triggered:{_extr(ctx.triggered[0])}:'
+                     )
+        try:
+            return fn(*args, **kwargs)
+        except PreventUpdate:
+            raise
+        except:
+            logging.exception('callb:ERROR:')
+            raise
+
+    return _log_wrapper
+
+
+def cell_coverage(cmat, regions, cells):
+    m = cmat.cmat
+    if regions is not None:
+        m = m[regions, :]
+    if cells is not None:
+        m = m[:, cmat.cannot[cmat.cannot.cell.isin(cells)].index]
+        return np.asarray(m.sum(1)).flatten()
+    return np.asarray(m.sum(1)).flatten()
+
+
+def _highlight(row, rmin, rmax, highlight):
+    if (
+        row.start >= rmin + (rmax - rmin) / 100 * highlight[0]
+        and row.end <= rmin + (rmax - rmin) / 100 * highlight[1]
+    ):
+        return "inside"
+    return "outside"
+
+
+##############
+# drawing helper functions
+##############
+
+def get_locus(regs_):
+    #sregs_ = regs_[regs_.highlight == "inside"]
+    if regs_.shape[0] == 0:
+        return None
+    xmin = regs_.start.min()
+    xmax = regs_.end.max()
+    chrom = regs_.chrom.unique()[0]
+    return [chrom, xmin, xmax]
+
+def get_highlight(regs_):
+    sregs_ = regs_[regs_.highlight == "inside"]
+    if sregs_.shape[0] == 0:
+        return None
+    xmin = sregs_.start.min()
+    xmax = sregs_.end.max()
+    return [xmin, xmax]
+
+class TrackManager:
+    def __init__(self, regs_, tracknames,
+                 genes, controlprops):
+        self.regs_ = regs_
+        self.tracknames = tracknames
+        self.trackheight = 3
+        self.locus = get_locus(regs_)
+        self.highlight = get_highlight(regs_)
+        self.controlprops = controlprops
+        #self.plottype = plottype
+        #self.separated = separated
+        self.genes = genes
+        self.init_trace()
+
+    def allocate(self):
+        if not self.controlprops['separated']:
+            ntracks = 1
+        else:
+            ntracks = len(self.tracknames)
+       #     print('not separated')
+
+       #     specs = [[{"rowspan": self.trackheight}]] + [[None]] * (self.trackheight-1) + [[{"rowspan": 1}]]
+
+       #     fig = make_subplots(
+       #         rows=ntracks * self.trackheight + 1,
+       #         cols=1,
+       #         specs=specs,
+       #         shared_xaxes=True,
+       #         vertical_spacing=0.05,
+       #         print_grid=True,
+       #     )
+       # else:
+        #print(' separated')
+        #ntracks = len(self.tracknames)
+        specs=[]
+        for n in range(ntracks):
+            specs += [[{"rowspan": self.trackheight}]]
+            specs += [[None]]*(self.trackheight - 1)
+        specs += [[{"rowspan": 1}]]
+        #print(specs)
+        #print(len(specs))
+        #specs = [[{"rowspan": ntracks * 3}]] + \
+        #    [[None]] * (ntracks * 3 + 1) + [[{"rowspan": 1}]]
+
+        fig = make_subplots(
+            rows=ntracks * self.trackheight + 1,
+            cols=1,
+            specs=specs,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            print_grid=True,
+        )
+        return fig
+
+    def draw_summary_track(self, trackname):
+        plobjs = []
+        plottype = self.controlprops['plottype']
+        sregs_ = self.regs_
+        if plottype == "bar":
+            plobjs.append(go.Bar(x=sregs_.start,
+                                 y=sregs_[trackname],
+                                 name=trackname))
+        else:
+            plobjs.append(go.Scatter(x=sregs_.start,
+                                     y=sregs_[trackname],
+                                     mode="lines", name=trackname,))
+
+        plobjs.append(go.Scatter(
+                x=sregs_.start,
+                y=sregs_[trackname],
+                mode="markers",
+                opacity=0,
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+        return plobjs
+
+    def init_trace(self):
+        self.itrace = 1
+
+    def next_trace(self):
+        if self.controlprops['separated']:
+            self.itrace += self.trackheight
+
+    def extend_trace(self, fig, plobjs):
+        for plobj in plobjs:
+            print(f'extend_trace at {self.itrace}')
+            fig.add_trace(plobj, row=self.itrace, col=1)
+        return fig
+
+    def draw_tracks(self, fig):
+        self.init_trace()
+        for trackname in self.tracknames:
+            self.extend_trace(fig, self.draw_summary_track(trackname))
+            self.next_trace()
+
+        #hl = get_highlight(self.regs_)
+
+        #if selected is None:
+        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
+        #else:
+        #    fig = draw_summary_figure_3(fig, regs_, plottype, "selected")
+        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
+
+        title = f"Window: {self.locus[0]}:{self.locus[1]}-{self.locus[2]}"
+        if self.highlight is not None:
+            title += f"<br>Highlight: {self.locus[0]}:{self.highlight[0]}-{self.highlight[1]}"
+
+        fig.layout.update(
+            dict(title=title, dragmode=self.controlprops['dragmode'],
+                 clickmode="event+select",
+                 template="plotly_white")
+        )
+        return fig
+
+    def draw_highlight(self, fig):
+        if self.highlight is None:
+            return fig
+
+        xmin, xmax = self.highlight
+        return fig.add_shape(
+            type="rect",
+            xref='x',
+            yref='paper',
+            x0=xmin,
+            y0=0,
+            x1=xmax,
+            y1=1,
+            fillcolor="LightSalmon",
+            opacity=0.3,
+            layer="below",
+            line_width=0,
+        )
+        #return self.draw_highlight(fig, regs_)
+
+    def draw_annotation(self, fig):
+        if self.genes is not None:
+            ntracks = len(self.tracknames) if self.controlprops['separated'] else 1
+            chrom, start, end = self.locus
+            plobjs = _draw_gene_annotation(fig, self.genes, chrom, start, end)
+            for plobj in plobjs:
+                fig.add_trace(
+                    plobj,
+                    row=ntracks*self.trackheight + 1,
+                    col=1,
+                )
+            fig.layout[f"yaxis{ntracks+1}"]["showticklabels"] = False
+            fig.layout[f"yaxis{ntracks+1}"]["showgrid"] = False
+            fig.layout[f"yaxis{ntracks+1}"]["zeroline"] = False
+            fig.layout[f"xaxis{ntracks+1}"]["showgrid"] = False
+            fig.layout[f"xaxis{ntracks+1}"]["zeroline"] = False
+        else:
+            fig.layout["xaxis"]["showticklabels"] = True
+        return fig
+
+    def draw(self):
+        fig = self.allocate()
+        fig = self.draw_tracks(fig)
+        fig = self.draw_highlight(fig)
+        fig = self.draw_annotation(fig)
+
+        return fig
+
+def draw_highlight(fig, regs_):
+    hl = get_highlight(regs_)
+    if hl is None:
+        return fig
+    xmin, xmax = hl
+
+    return fig.add_shape(
+        type="rect",
+        xref='x',
+        yref='paper',
+        x0=xmin,
+        y0=0,
+        x1=xmax,
+        y1=1,
+        fillcolor="LightSalmon",
+        opacity=0.3,
+        layer="below",
+        line_width=0,
+    )
+
+
+def draw_summary_figure_3(fig, regs_, plottype, yfield):
+    if plottype == "bar":
+        fig.add_trace(
+            go.Bar(x=regs_.start, y=regs_[yfield], name=yfield), row=1, col=1,
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(x=regs_.start, y=regs_[yfield], mode="lines", name=yfield,),
+            row=1,
+            col=1,
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=regs_.start,
+            y=regs_[yfield],
+            mode="markers",
+            opacity=0,
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
+    return fig
+
+
+def _draw_gene_annotation(fig, genes, chrom, start, end):
+    wbed = BedTool([Interval(chrom, start, end)])
+    regions = genes.intersect(wbed)
+    xs = []
+    ys = []
+
+    midpoints = []
+    names = []
+    offset = 0
+    lastiv = []
+
+    rangeannot = []
+    for i, region in enumerate(regions):
+        names.append(region.name)
+
+        # draw arrow to indicate direction
+        if region.strand != "-":
+            xs += [
+                region.start,
+                region.start,
+                region.end,
+                region.end + 1000,
+                region.end,
+                region.start,
+                None,
+            ]
+            ys += [0, 1, 1, 0.5, 0, 0, None]
+            midpoints.append(region.start)
+        else:
+            xs += [
+                region.start,
+                region.start - 1000,
+                region.start,
+                region.end,
+                region.end,
+                region.start,
+                None,
+            ]
+            ys += [0, 0.5, 1, 1, 0, 0, None]
+            midpoints.append(region.end)
+        rangeannot.append(f"{region.chrom}:{region.start}-{region.end};{region.strand}")
+
+    if len(midpoints) > 0:
+        plobjs = [
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                fill="toself",
+                name="Genes",
+                marker=dict(color="goldenrod"),
+            ),
+            go.Scatter(
+                x=midpoints,
+                y=[0.5] * len(midpoints),
+                text=names,
+                mode="text",
+                opacity=0.0,
+                name="Genes",
+                customdata=rangeannot,
+                hovertemplate="%{text}<br>%{customdata}",
+                showlegend=False,
+            ),
+        ]
+        return plobjs
+#    else:
+#        return []
+#        fig.add_trace(
+#            go.Scatter(
+#                x=xs,
+#                y=ys,
+#                mode="lines",
+#                fill="toself",
+#                name="Genes",
+#                marker=dict(color="goldenrod"),
+#            ),
+#            row=12,
+#            col=1,
+#        )
+#        fig.add_trace(
+#            go.Scatter(
+#                x=midpoints,
+#                y=[0.5] * len(midpoints),
+#                text=names,
+#                mode="text",
+#                opacity=0.0,
+#                name="Genes",
+#                customdata=rangeannot,
+#                hovertemplate="%{text}<br>%{customdata}",
+#                showlegend=False,
+#            ),
+#            row=12,
+#            col=1,
+#        )
+#        fig.layout["yaxis2"]["showticklabels"] = False
+#        fig.layout["yaxis2"]["showgrid"] = False
+#        fig.layout["yaxis2"]["zeroline"] = False
+#        fig.layout["xaxis2"]["showgrid"] = False
+#        fig.layout["xaxis2"]["zeroline"] = False
+#    else:
+#        fig.layout["xaxis"]["showticklabels"] = True
+#    return fig
+
+def draw_gene_annotation(fig, genes, chrom, start, end):
+    wbed = BedTool([Interval(chrom, start, end)])
+    regions = genes.intersect(wbed)
+    xs = []
+    ys = []
+
+    midpoints = []
+    names = []
+    offset = 0
+    lastiv = []
+
+    rangeannot = []
+    for i, region in enumerate(regions):
+        names.append(region.name)
+
+        # draw arrow to indicate direction
+        if region.strand != "-":
+            xs += [
+                region.start,
+                region.start,
+                region.end,
+                region.end + 1000,
+                region.end,
+                region.start,
+                None,
+            ]
+            ys += [0, 1, 1, 0.5, 0, 0, None]
+            midpoints.append(region.start)
+        else:
+            xs += [
+                region.start,
+                region.start - 1000,
+                region.start,
+                region.end,
+                region.end,
+                region.start,
+                None,
+            ]
+            ys += [0, 0.5, 1, 1, 0, 0, None]
+            midpoints.append(region.end)
+        rangeannot.append(f"{region.chrom}:{region.start}-{region.end};{region.strand}")
+
+    if len(midpoints) > 0:
+    #    plobjs = [
+    #        go.Scatter(
+    #            x=xs,
+    #            y=ys,
+    #            mode="lines",
+    #            fill="toself",
+    #            name="Genes",
+    #            marker=dict(color="goldenrod"),
+    #        ),
+    #        go.Scatter(
+    #            x=midpoints,
+    #            y=[0.5] * len(midpoints),
+    #            text=names,
+    #            mode="text",
+    #            opacity=0.0,
+    #            name="Genes",
+    #            customdata=rangeannot,
+    #            hovertemplate="%{text}<br>%{customdata}",
+    #            showlegend=False,
+    #        ),
+    #    ]
+    #    return plobjs
+    #else:
+    #    return []
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                fill="toself",
+                name="Genes",
+                marker=dict(color="goldenrod"),
+            ),
+            row=12,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=midpoints,
+                y=[0.5] * len(midpoints),
+                text=names,
+                mode="text",
+                opacity=0.0,
+                name="Genes",
+                customdata=rangeannot,
+                hovertemplate="%{text}<br>%{customdata}",
+                showlegend=False,
+            ),
+            row=12,
+            col=1,
+        )
+        fig.layout["yaxis2"]["showticklabels"] = False
+        fig.layout["yaxis2"]["showgrid"] = False
+        fig.layout["yaxis2"]["zeroline"] = False
+        fig.layout["xaxis2"]["showgrid"] = False
+        fig.layout["xaxis2"]["zeroline"] = False
+    else:
+        fig.layout["xaxis"]["showticklabels"] = True
+    return fig
+
+
 
 def main(args=None):
     args = parser.parse_args(args=args)
@@ -77,55 +565,6 @@ def main(args=None):
 
     logging.debug('scbrowser - startup')
     logging.debug(args)
-
-    ###############
-    # data helper functions
-    ###############
-
-    def log_layer(fn):
-        @wraps(fn)
-        def _log_wrapper(*args, **kwargs):
-            ctx = dash.callback_context
-            def _extr(props):
-                return {k: props[k] for k in props \
-                        if k not in ['points',
-                                 'scatter-plot.selectedData',
-                                 'summary-plot.selectedData']}
-
-            logging.debug(f'wrap:callb:'
-                          f'outputs:{_extr(ctx.outputs_list)}:'
-                          f'inputs:{_extr(ctx.inputs)}:'
-                          f'triggered:{_extr(ctx.triggered[0])}:'
-                         )
-            try:
-                return fn(*args, **kwargs)
-            except PreventUpdate:
-                raise
-            except:
-                logging.exception('callb:ERROR:')
-                raise
-
-        return _log_wrapper
-
-
-    def cell_coverage(cmat, regions, cells):
-        m = cmat.cmat
-        if regions is not None:
-            m = m[regions, :]
-        if cells is not None:
-            m = m[:, cmat.cannot[cmat.cannot.cell.isin(cells)].index]
-            return np.asarray(m.sum(1)).flatten()
-        return np.asarray(m.sum(1)).flatten()
-
-
-    def _highlight(row, rmin, rmax, highlight):
-        if (
-            row.start >= rmin + (rmax - rmin) / 100 * highlight[0]
-            and row.end <= rmin + (rmax - rmin) / 100 * highlight[1]
-        ):
-            return "inside"
-        return "outside"
-
 
     ##############
     # load data
@@ -253,7 +692,19 @@ def main(args=None):
                             style=dict(width="49%", display="inline-block"),
                         ),
                     ]),
-                    html.Div(id="test-field"),
+                    html.Div([
+                        html.Label(html.B("Separate tracks:")),
+                        dcc.RadioItems(
+                            id="separate-track-selector",
+                            options=[
+                                {"label": "No", "value": "No"},
+                                {"label": "Yes", "value": "Yes"},
+                            ],
+                            value="No",
+                            style=dict(width="49%", display="inline-block"),
+                        ),
+                    ]),
+                    html.Div(id="test-field", style={"display": "none"}),
                 ],
                 style=dict(width="49%", display="inline-block"),
             ),
@@ -272,144 +723,6 @@ def main(args=None):
         ],
         className="container",
     )
-
-
-    ##############
-    # drawing helper functions
-    ##############
-
-    def get_highlight(regs_):
-        sregs_ = regs_[regs_.highlight == "inside"]
-        if sregs_.shape[0] == 0:
-            return None
-        xmin = sregs_.start.min()
-        xmax = sregs_.end.max()
-        return [xmin, xmax]
-
-    def draw_highlight(fig, regs_):
-        hl = get_highlight(regs_)
-        if hl is None:
-            return fig
-        xmin, xmax = hl
-
-        return fig.add_shape(
-            type="rect",
-            x0=xmin,
-            y0=0,
-            x1=xmax,
-            y1=max([max(d.y) for d in fig.data]),
-            fillcolor="LightSalmon",
-            opacity=0.3,
-            layer="below",
-            line_width=0,
-        )
-
-
-    def draw_summary_figure_3(fig, regs_, plottype, yfield):
-        if plottype == "bar":
-            fig.add_trace(
-                go.Bar(x=regs_.start, y=regs_[yfield], name=yfield), row=1, col=1,
-            )
-        else:
-            fig.add_trace(
-                go.Scatter(x=regs_.start, y=regs_[yfield], mode="lines", name=yfield,),
-                row=1,
-                col=1,
-            )
-
-        fig.add_trace(
-            go.Scatter(
-                x=regs_.start,
-                y=regs_[yfield],
-                mode="markers",
-                opacity=0,
-                hoverinfo="skip",
-                showlegend=False,
-            ),
-            row=1,
-            col=1,
-        )
-        return fig
-
-
-    def draw_gene_annotation(fig, genes, chrom, start, end):
-        wbed = BedTool([Interval(chrom, start, end)])
-        regions = genes.intersect(wbed)
-        xs = []
-        ys = []
-
-        midpoints = []
-        names = []
-        offset = 0
-        lastiv = []
-
-        rangeannot = []
-        for i, region in enumerate(regions):
-            names.append(region.name)
-
-            # draw arrow to indicate direction
-            if region.strand != "-":
-                xs += [
-                    region.start,
-                    region.start,
-                    region.end,
-                    region.end + 1000,
-                    region.end,
-                    region.start,
-                    None,
-                ]
-                ys += [0, 1, 1, 0.5, 0, 0, None]
-                midpoints.append(region.start)
-            else:
-                xs += [
-                    region.start,
-                    region.start - 1000,
-                    region.start,
-                    region.end,
-                    region.end,
-                    region.start,
-                    None,
-                ]
-                ys += [0, 0.5, 1, 1, 0, 0, None]
-                midpoints.append(region.end)
-            rangeannot.append(f"{region.chrom}:{region.start}-{region.end};{region.strand}")
-
-        if len(midpoints) > 0:
-            fig.add_trace(
-                go.Scatter(
-                    x=xs,
-                    y=ys,
-                    mode="lines",
-                    fill="toself",
-                    name="Genes",
-                    marker=dict(color="goldenrod"),
-                ),
-                row=12,
-                col=1,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=midpoints,
-                    y=[0.5] * len(midpoints),
-                    text=names,
-                    mode="text",
-                    opacity=0.0,
-                    name="Genes",
-                    customdata=rangeannot,
-                    hovertemplate="%{text}<br>%{customdata}",
-                    showlegend=False,
-                ),
-                row=12,
-                col=1,
-            )
-            fig.layout["yaxis2"]["showticklabels"] = False
-            fig.layout["yaxis2"]["showgrid"] = False
-            fig.layout["yaxis2"]["zeroline"] = False
-            fig.layout["xaxis2"]["showgrid"] = False
-            fig.layout["xaxis2"]["zeroline"] = False
-        else:
-            fig.layout["xaxis"]["showticklabels"] = True
-        return fig
 
 
     ############
@@ -505,11 +818,14 @@ def main(args=None):
             Input(component_id="highlight-selector", component_property="value"),
             Input(component_id="dragmode-selector", component_property="children"),
             Input(component_id="normalize-selector", component_property="value"),
+            Input(component_id="separate-track-selector", component_property="value"),
         ],
     )
     @log_layer
-    def update_summary(chrom, interval, plottype, selected, highlight, dragmode, normalize):
+    def update_summary(chrom, interval, plottype, selected,
+                       highlight, dragmode, normalize, separated):
         normalize = True if normalize == "Yes" else False
+        separated = True if separated == "Yes" else False
 
         if chrom is None:
             raise PreventUpdate
@@ -533,6 +849,7 @@ def main(args=None):
             True,
         )
 
+        tracknames = ['total_coverage']
         if normalize:
             regs_['total_coverage'] /= readsincell.sum()*1e5
 
@@ -540,40 +857,52 @@ def main(args=None):
             sel = [point["customdata"][0] for point in selected["points"]]
             cell_ids = cmat.cannot[cmat.cannot.cell.isin(sel)].index
             regs_["selected"] = cell_coverage(cmat, regs_.index, sel)
+            tracknames += ['selected']
 
             if normalize:
                 regs_['selected'] /= readsincell[cell_ids].sum()*1e5
 
-        specs = [[{"rowspan": 11}]] + [[None]] * 10 + [[{"rowspan": 1}]]
+        controlprops = {'plottype': plottype,
+                        'dragmode': dragmode,
+                        'separated': separated}
+        trackmanager = TrackManager(regs_, tracknames,
+                                    genes, controlprops)
+        fig = trackmanager.draw()
 
-        fig = make_subplots(
-            rows=12,
-            cols=1,
-            specs=specs,
-            shared_xaxes=True,
-            vertical_spacing=0.05,
-            print_grid=True,
-        )
+        #specs = [[{"rowspan": 11}]] + [[None]] * 10 + [[{"rowspan": 1}]]
 
-        hl = get_highlight(regs_)
-        title = f"Window: {chrom}:{start}-{end}"
-        if hl is not None:
-            title += f"<br>Highlight: {chrom}:{hl[0]}-{hl[1]}"
+        #fig = make_subplots(
+        #    rows=12,
+        #    cols=1,
+        #    specs=specs,
+        #    shared_xaxes=True,
+        #    vertical_spacing=0.01,
+        #    print_grid=True,
+        #)
 
-        if selected is None:
-            fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
-        else:
-            fig = draw_summary_figure_3(fig, regs_, plottype, "selected")
-            fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
-        fig.layout.update(
-            dict(title=title, dragmode=dragmode)
-        )
-        fig.update_layout(clickmode="event+select")
-        fig.update_layout(template="plotly_white")
+        #if selected is None:
+        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
+        #else:
+        #    fig = draw_summary_figure_3(fig, regs_, plottype, "selected")
+        #    fig = draw_summary_figure_3(fig, regs_, plottype, "total_coverage")
 
-        fig = draw_highlight(fig, regs_)
-        if genes is not None:
-            fig = draw_gene_annotation(fig, genes, chrom, start, end)
+        #hl = get_highlight(regs_)
+        #title = f"Window: {chrom}:{start}-{end}"
+        #if hl is not None:
+        #    title += f"<br>Highlight: {chrom}:{hl[0]}-{hl[1]}"
+
+        #fig.layout.update(
+        #    dict(title=title, dragmode=dragmode, clickmode="event+select",
+        #         template="plotly_white")
+        #)
+        ##fig.update_layout(clickmode="event+select")
+        ##fig.update_layout(template="plotly_white")
+
+        #fig = draw_highlight(fig, regs_)
+
+        #if genes is not None:
+        #    fig = draw_gene_annotation(fig, genes, chrom, start, end)
+
 
         return fig
 
@@ -758,6 +1087,20 @@ def main(args=None):
         if "dragmode" not in relayout:
             raise PreventUpdate
         return relayout["dragmode"]
+
+    #@app.callback(
+    #    Output(component_id="test-field", component_property="children"),
+    #    [
+#Inp#ut(component_id="scatter-plot", component_property="relayoutData"),
+    #     Input(component_id="scatter-plot", component_property="selectedData"),
+    #     Input(component_id="test-field", component_property="children")
+    #     ],
+    #)
+    #@log_layer
+    #def update_point_selector(selected, data):
+    #    print(selected, data)
+    #    return 'hallo'
+
 
     ############
     # run server
