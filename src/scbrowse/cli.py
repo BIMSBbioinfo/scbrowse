@@ -96,7 +96,8 @@ def cell_coverage(cmat, regions, cells):
     if regions is not None:
         m = m[regions, :]
     if cells is not None:
-        m = m[:, cmat.cannot[cmat.cannot.cell.isin(cells)].index]
+        #m = m[:, cmat.cannot[cmat.cannot.cell.isin(cells)].index]
+        m = m[:, cells]
         return np.asarray(m.sum(1)).flatten()
     return np.asarray(m.sum(1)).flatten()
 
@@ -130,6 +131,77 @@ def get_highlight(regs_):
     xmax = sregs_.end.max()
     return [xmin, xmax]
 
+class TableManager:
+    def __init__(self, regs_):
+        self.regs_ = regs_
+        self.tracknames = []
+        self.n_highlight = []
+        self.n_outside = []
+        self.odds = []
+        self.pvalues = []
+        #self.tracknames = tracknames
+
+    def draw(self):
+        if len(self.tracknames) <=0:
+            return ""
+        return html.Table(
+               self.draw_header() +
+               self.draw_rows()
+           )
+
+    def draw_header(self):
+        return [html.Thead([
+                html.Tr(
+                    [
+                        html.Th("Name"),
+                        html.Th("Highlight"),
+                        html.Th("Outside"),
+                        #html.Th("Total"),
+                        html.Th("Odds-ratio"),
+                        html.Th("P-value"),
+                    ]
+                ),
+        ])]
+
+    def add_row(self, name, n11, c1, r1, n):
+        n21 = c1 - n11
+        n12 = r1 - n11
+        n22 = n - n11 - n12 - n21
+        odds, pval = fisher_exact([[n11, n12],
+                                   [n21, n22]],
+                                  alternative='greater')
+        self.tracknames.append(name)
+        self.n_highlight.append(n11)
+        self.n_outside.append(n21)
+        self.odds.append(odds)
+        self.pvalues.append(pval)
+
+    def init_row(self):
+        self.irow = 0
+
+    def next_row(self):
+        self.irow += 1
+
+    def draw_rows(self):
+        return [html.Tbody([
+            self.draw_row(i) for i, _ in enumerate(self.tracknames)])
+        ]
+
+    def draw_row(self, irow):
+        print(irow)
+        row = html.Tr([html.Td(self.tracknames[irow]),
+                        html.Td(self.n_highlight[irow]),
+                        html.Td(self.n_outside[irow]),
+                        #html.Td(self.n_outside[irow] + self.n_highlight[irow]),
+                        html.Td('%.3f' % self.odds[irow]),
+                        html.Td('%.3f' % self.pvalues[irow]),
+                       ]
+                      )
+
+        return row
+
+
+
 class TrackManager:
     def __init__(self, regs_, tracknames,
                  genes, controlprops):
@@ -158,7 +230,7 @@ class TrackManager:
             cols=1,
             specs=specs,
             shared_xaxes=True,
-            vertical_spacing=0.05,
+            vertical_spacing=0.00,
             print_grid=True,
         )
         return fig
@@ -527,6 +599,7 @@ def main(args=None):
         [
             html.Div(
                 [
+                    html.Div(id="stats-field"),
                     html.Div(
                         id="dragmode-selector", children="select", style={"display": "none"}
                     ),
@@ -536,7 +609,7 @@ def main(args=None):
                     ),
                     html.Label(html.B("Annotation:")),
                     dcc.Dropdown(
-                        id="annot-selector",
+                        id="annotation-selector",
                         options=[
                             {"label": name[6:], "value": name}
                             for name in emb.columns
@@ -545,9 +618,8 @@ def main(args=None):
                         + [{"label": "None", "value": "None"}],
                         value="None",
                     ),
-                    html.Div(id="stats-field"),
                 ],
-                style=dict(width="49%", display="inline-block"),
+                style=dict(width="69%", display="inline-block"),
             ),
             html.Div(
                 [
@@ -616,19 +688,30 @@ def main(args=None):
                             style=dict(width="49%", display="inline-block"),
                         ),
                     ]),
+               #     html.Div([
+               #         html.Label(html.B("Track selection:")),
+               #         dcc.RadioItems(
+               #             id="annotation-track-selector",
+               #             options=[
+               #                 {"label": "Annotation", "value": "Annotation"},
+               #                 {"label": "Selection", "value": "Selection"},
+               #             ],
+               #             value="Annotation",
+               #             style=dict(width="49%", display="inline-block"),
+               #         ),
+               #     ]),
                     html.Div(id="test-field", style={"display": "none"}),
                 ],
-                style=dict(width="49%", display="inline-block"),
+                style=dict(width="29%", display="inline-block"),
             ),
             html.Br(),
             html.Div(
-                [dcc.Graph(id="scatter-plot")],
+                [dcc.Graph(id="scatter-plot", style={'height': '700px'})],
                 style=dict(width="49%", display="inline-block"),
             ),
             html.Div(
                 [
-                    dcc.Graph(id="summary-plot"),
-                    # html.Pre(id="stats-field"),
+                    dcc.Graph(id="summary-plot", style={'height': '700px'}),
                 ],
                 style=dict(width="49%", display="inline-block"),
             ),
@@ -699,7 +782,7 @@ def main(args=None):
 
     @app.callback(
         Output(component_id="scatter-plot", component_property="figure"),
-        [Input(component_id="annot-selector", component_property="value")],
+        [Input(component_id="annotation-selector", component_property="value")],
     )
     @log_layer
     def update_scatter(annot):
@@ -731,11 +814,13 @@ def main(args=None):
             Input(component_id="dragmode-selector", component_property="children"),
             Input(component_id="normalize-selector", component_property="value"),
             Input(component_id="separate-track-selector", component_property="value"),
+            Input(component_id="annotation-selector", component_property="value"),
+            #Input(component_id="annotation-selector", component_property="value"),
         ],
     )
     @log_layer
     def update_summary(chrom, interval, plottype, selected,
-                       highlight, dragmode, normalize, separated):
+                       highlight, dragmode, normalize, separated, annotation):
         normalize = True if normalize == "Yes" else False
         separated = True if separated == "Yes" else False
 
@@ -765,10 +850,22 @@ def main(args=None):
         if normalize:
             regs_['total_coverage'] /= readsincell.sum()*1e5
 
-        if selected is not None:
+        if annotation != 'None':
+            df = pd.merge(cmat.cannot, emb, how='left', left_on='cell', right_on='barcode')
+            tracknames = df[annotation].unique()
+
+            for trackname in tracknames:
+                cell_ids =  df[df[annotation] == trackname].index
+                #cell_ids = df[df.cell.isin(sel)].index
+                regs_[trackname] = cell_coverage(cmat, regs_.index, cell_ids)
+                if normalize:
+                    regs_[trackname] /= readsincell[cell_ids].sum()*1e5
+                #cell_ids = df[df.cell.isin(sel)].index
+
+        elif selected is not None:
             sel = [point["customdata"][0] for point in selected["points"]]
             cell_ids = cmat.cannot[cmat.cannot.cell.isin(sel)].index
-            regs_["selected"] = cell_coverage(cmat, regs_.index, sel)
+            regs_["selected"] = cell_coverage(cmat, regs_.index, cell_ids)
             tracknames += ['selected']
 
             if normalize:
@@ -777,6 +874,8 @@ def main(args=None):
         controlprops = {'plottype': plottype,
                         'dragmode': dragmode,
                         'separated': separated}
+                        #'annotation': annotation}
+
         trackmanager = TrackManager(regs_, tracknames,
                                     genes, controlprops)
         fig = trackmanager.draw()
@@ -791,10 +890,11 @@ def main(args=None):
             Input(component_id="locus-selector", component_property="value"),
             Input(component_id="scatter-plot", component_property="selectedData"),
             Input(component_id="highlight-selector", component_property="value"),
+            Input(component_id="annotation-selector", component_property="value"),
         ],
     )
     @log_layer
-    def update_statistics(chrom, interval, selected, highlight):
+    def update_statistics(chrom, interval, selected, highlight, annotation):
         if chrom is None:
             raise PreventUpdate
         if interval is None:
@@ -821,7 +921,33 @@ def main(args=None):
 
         region_ids = regs_.index
 
-        if selected is not None:
+        tablemanager = TableManager(regs_)
+
+        if annotation != 'None':
+            df = pd.merge(cmat.cannot, emb, how='left', left_on='cell', right_on='barcode')
+            tracknames = df[annotation].unique()
+
+            for trackname in tracknames:
+                cell_ids =  df[df[annotation] == trackname].index
+                #regs_[trackname] = cell_coverage(cmat, regs_.index, cell_ids)
+                n11 = cmat.cmat[region_ids, :][:, cell_ids].sum()
+                # all selected cell reads
+                c1 = readsincell[cell_ids].sum()
+                r1 = readsinregion[region_ids].sum()
+                n = readsincell.sum()
+                tablemanager.add_row(trackname, n11, c1, r1, n)
+
+        #elif selected is not None:
+        #    sel = [point["customdata"][0] for point in selected["points"]]
+        #    cell_ids = cmat.cannot[cmat.cannot.cell.isin(sel)].index
+        #    regs_["selected"] = cell_coverage(cmat, regs_.index, cell_ids)
+        #    tracknames += ['selected']
+
+        #    if normalize:
+        #        regs_['selected'] /= readsincell[cell_ids].sum()*1e5
+
+        elif selected is not None:
+            #tracknames = ['selected']
             sel = [point["customdata"][0] for point in selected["points"]]
             cell_ids = cmat.cannot[cmat.cannot.cell.isin(sel)].index
 
@@ -829,92 +955,100 @@ def main(args=None):
             n11 = cmat.cmat[region_ids, :][:, cell_ids].sum()
             # all selected cell reads
             c1 = readsincell[cell_ids].sum()
+            r1 = readsinregion[region_ids].sum()
+            n = readsincell.sum()
+            tablemanager.add_row('selected', n11, c1, r1, n)
 
-        else:
-            n11 = 0
-            c1 = 0
-            cell_ids = []
+        #else:
+        #    tracknames = []
+        #    n11 = 0
+        #    c1 = 0
+        #    cell_ids = []
 
-        N = readsincell.sum()
-        # all non-selected cell reads
-        c2 = N - c1
+        ## all non-selected cell reads
+        #c2 = N - c1
 
-        # all highlighted reads
-        r1 = readsinregion[region_ids].sum()
-        # all non-highlighted reads
-        r2 = N - readsinregion[region_ids].sum()
+        ## all highlighted reads
+        ## all non-highlighted reads
+        #r2 = N - readsinregion[region_ids].sum()
 
-        # selected cells and non-highlighted reads
-        n21 = c1 - n11
-        # non-selected cells and highlighted reads
-        n12 = r1 - n11
-        # non-selected cells and non-highlighted reads
-        n22 = N - n11 - n12 - n21
+        ## selected cells and non-highlighted reads
+        #n21 = c1 - n11
+        ## non-selected cells and highlighted reads
+        #n12 = r1 - n11
+        ## non-selected cells and non-highlighted reads
+        #n22 = N - n11 - n12 - n21
 
-        def get_ele(n):
-            return html.Td(n, style=dict(textAlign='right',
-                                         backgroundColor='lightblue'))
 
-        def get_mele(n):
-            return html.Td(n, style=dict(textAlign='right',
-                                         backgroundColor='lightgray'))
+        tab = tablemanager.draw()
+        return tab
+        #for name in tracknames:
+        #    tab.add_row(name, n11, c1, r1, n)
 
-        tab = html.Table(
-            [
-                html.Thead([html.Tr([html.Th("Cells", colSpan=3)]),]),
-                html.Thead(
-                    [
-                        html.Tr(
-                            [
-                                html.Th(f"selected cells: {len(cell_ids)}"),
-                                html.Th(
-                                    "remaining cells: {}".format(
-                                        cmat.cmat.shape[1] - len(cell_ids)
-                                    )
-                                ),
-                                html.Th(f"total cells: {cmat.cmat.shape[1]}"),
-                            ]
-                        ),
-                    ]
-                ),
+        #def get_ele(n):
+        #    return html.Td(n, style=dict(textAlign='right',
+        #                                 backgroundColor='lightblue'))
 
-                html.Tbody(
-                    [
-                        html.Tr(
-                            [
-                                get_ele(n11),
-                                get_ele(n12),
-                                get_mele(r1),
-                                html.Td("No. reads in highlight"),
-                            ]
-                        ),
-                        html.Tr(
-                            [
-                                get_ele(n21),
-                                get_ele(n22),
-                                get_mele(r2),
-                                html.Td("No. reads outside highlight"),
-                            ]
-                        ),
-                        html.Tr(
-                            [get_mele(c1), get_mele(c2), get_mele(N), html.Td(""),]
-                        ),
-                    ]
-                ),
-            ]
-        )
+        #def get_mele(n):
+        #    return html.Td(n, style=dict(textAlign='right',
+        #                                 backgroundColor='lightgray'))
 
-        odds, pval = fisher_exact([[n11, n12], [n21, n22]], alternative='greater')
-        return html.Div(
-            [
-                tab,
-                html.Pre(
-                    children=f"""Fisher's test:
-                      P-value={pval}
-                      odds={odds}"""
-                ),
-            ]
-        )
+        #tab = html.Table(
+        #    [
+        #        html.Thead([html.Tr([html.Th("Cells", colSpan=3)]),]),
+        #        html.Thead(
+        #            [
+        #                html.Tr(
+        #                    [
+        #                        html.Th(f"selected cells: {len(cell_ids)}"),
+        #                        html.Th(
+        #                            "remaining cells: {}".format(
+        #                                cmat.cmat.shape[1] - len(cell_ids)
+        #                            )
+        #                        ),
+        #                        html.Th(f"total cells: {cmat.cmat.shape[1]}"),
+        #                    ]
+        #                ),
+        #            ]
+        #        ),
+
+        #        html.Tbody(
+        #            [
+        #                html.Tr(
+        #                    [
+        #                        get_ele(n11),
+        #                        get_ele(n12),
+        #                        get_mele(r1),
+        #                        html.Td("No. reads in highlight"),
+        #                    ]
+        #                ),
+        #                html.Tr(
+        #                    [
+        #                        get_ele(n21),
+        #                        get_ele(n22),
+        #                        get_mele(r2),
+        #                        html.Td("No. reads outside highlight"),
+        #                    ]
+        #                ),
+        #                html.Tr(
+        #                    [get_mele(c1), get_mele(c2), get_mele(N), html.Td(""),]
+        #                ),
+        #            ]
+        #        ),
+        #    ]
+        #)
+
+        #odds, pval = fisher_exact([[n11, n12], [n21, n22]], alternative='greater')
+        #return html.Div(
+        #    [
+        #        tab,
+        #        html.Pre(
+        #            children=f"""Fisher's test:
+        #              P-value={pval}
+        #              odds={odds}"""
+        #        ),
+        #    ]
+        #)
 
 
     @app.callback(
