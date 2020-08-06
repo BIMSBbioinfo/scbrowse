@@ -74,6 +74,7 @@ setup(
         'numpy',
         'pandas',
         'pybedtools>=0.8',
+        'flask_caching',
         'scregseg',
         # eg: 'aspectlib==1.1.1', 'six>=1.7',
     ],
