@@ -64,8 +64,6 @@ parser.add_argument(
 )
 
 colors = px.colors.qualitative.Light24
-#print(colors, )
-#print(colors[0])
 
 ###############
 # data helper functions
@@ -209,7 +207,6 @@ class TrackManager:
     def __init__(self, regs_, tracknames,
                  genes, controlprops):
         self.regs_ = regs_
-        print(f'got {tracknames}')
         self.tracknames = tracknames
         self.trackheight = 3
         self.locus = get_locus(regs_)
@@ -242,7 +239,6 @@ class TrackManager:
         return fig
 
     def draw_summary_track(self, trackname):
-        print(trackname, ' from draw_summary_track')
         plobjs = []
         plottype = self.controlprops['plottype']
         sregs_ = self.regs_
@@ -469,7 +465,6 @@ def main(args=None):
 
     app = dash.Dash("scbrowser")
 
-    #print(dir(app))
     app.title = "scbrowser"
     app.config["suppress_callback_exceptions"] = True
     cache = Cache(app.server, config={
@@ -530,21 +525,6 @@ def main(args=None):
             html.Div(
                 [
                     html.Div(id="stats-field"),
-                    html.Div(
-                        id="dragmode-selector", children="select", style={"display": "none"}
-                    ),
-                    html.Div(
-                        id="selection-store", children=None,
-                        style={"display": "none"}
-                    ),
-                    html.Div(
-                        id="session-id", children=session_id,
-                        style={"display": "none"}
-                    ),
-                    html.Div(
-                        id="dummy-div",
-                        style={"display": "none"}
-                    ),
                     html.Label(html.B("Annotation:")),
                     dcc.Dropdown(
                         id="annotation-selector",
@@ -556,7 +536,6 @@ def main(args=None):
                         + [{"label": "None", "value": "None"}],
                         value="None",
                     ),
-                    #html.Label(html.B("Clear selection:")),
                     html.Button('Clear selection',
                         id="clear-selection",
                         n_clicks=0,
@@ -578,6 +557,7 @@ def main(args=None):
                         html.Label(html.B("Chromosome:")),
                         dcc.Dropdown(id="chrom-selector", value=chroms[0],
                                      options=options,
+                                     disabled=True,
                                      style=dict(width="70%", display="inline-block"),),
                     ],),
                     html.Div([
@@ -587,6 +567,7 @@ def main(args=None):
                             min=0,
                             max=chromlens[chroms[0]],
                             step=1000,
+                            disabled=True,
                             value=[1, 1000000],),
                     ],),
                     html.Div([
@@ -646,6 +627,16 @@ def main(args=None):
                 ],
                 style=dict(width="49%", display="inline-block"),
             ),
+            html.Br(),
+                    dcc.Store(
+                        id="dragmode-selector", data="select",
+                    ),
+                    dcc.Store(
+                        id="selection-store", data=None,
+                    ),
+                    dcc.Store(
+                        id="session-id", data=session_id,
+                    ),
         ],
         className="container",
     )
@@ -749,22 +740,24 @@ def main(args=None):
     @app.callback(
         Output(component_id="summary-plot", component_property="figure"),
         [
-            Input(component_id="session-id", component_property="children"),
             Input(component_id="chrom-selector", component_property="value"),
             Input(component_id="locus-selector", component_property="value"),
             Input(component_id="plot-type-selector", component_property="value"),
             Input(component_id="scatter-plot", component_property="selectedData"),
             Input(component_id="highlight-selector", component_property="value"),
-            Input(component_id="dragmode-selector", component_property="children"),
+            Input(component_id="dragmode-selector", component_property="data"),
             Input(component_id="normalize-selector", component_property="value"),
             Input(component_id="separate-track-selector", component_property="value"),
             Input(component_id="annotation-selector", component_property="value"),
-            Input(component_id="selection-store", component_property="children"),
+            Input(component_id="selection-store", component_property="data"),
+        ],
+        [
+            State("session-id", "data"),
         ],
     )
     @log_layer
-    def update_summary(session_id, chrom, interval, plottype, selected,
-                       highlight, dragmode, normalize, separated, annotation, selectionstore):
+    def update_summary(chrom, interval, plottype, selected,
+                       highlight, dragmode, normalize, separated, annotation, selectionstore, session_id):
         normalize = True if normalize == "Yes" else False
         separated = True if separated == "Yes" else False
 
@@ -789,7 +782,6 @@ def main(args=None):
                 if normalize:
                     regs_.loc[:,trackname] /= readsincell[cell_ids].sum()*1e5
 
-        print('with annotation', tracknames)
 
         if session_id in session:
             # get cells from the cell selection store
@@ -801,7 +793,6 @@ def main(args=None):
                 if normalize:
                     regs_.loc[:,selcell] /= readsincell[cell_ids].sum()*1e5
 
-        print('with selection', tracknames)
         controlprops = {'plottype': plottype,
                         'dragmode': dragmode,
                         'separated': separated}
@@ -815,15 +806,17 @@ def main(args=None):
 
 
     @app.callback(
-        Output(component_id="selection-store", component_property="children"),
+        Output(component_id="selection-store", component_property="data"),
         [
-            Input(component_id="session-id", component_property="children"),
             Input(component_id="scatter-plot", component_property="selectedData"),
             Input(component_id="clear-selection", component_property="n_clicks"),
         ],
+        [
+            State("session-id", "data"),
+        ],
     )
     @log_layer
-    def selection_store(session_id, selected, clicked):
+    def selection_store(selected, clicked, session_id):
 
         ctx = dash.callback_context
 
@@ -860,18 +853,20 @@ def main(args=None):
     @app.callback(
         Output(component_id="stats-field", component_property="children"),
         [
-            Input(component_id="session-id", component_property="children"),
             Input(component_id="chrom-selector", component_property="value"),
             Input(component_id="locus-selector", component_property="value"),
             Input(component_id="scatter-plot", component_property="selectedData"),
             Input(component_id="highlight-selector", component_property="value"),
             Input(component_id="annotation-selector", component_property="value"),
-            Input(component_id="selection-store", component_property="children"),
+            Input(component_id="selection-store", component_property="data"),
+        ],
+        [
+            State("session-id", "data"),
         ],
     )
     @log_layer
-    def update_statistics(session_id, chrom, interval, selected,
-                          highlight, annotation, selectionstore):
+    def update_statistics(chrom, interval, selected,
+                          highlight, annotation, selectionstore, session_id):
         if chrom is None:
             raise PreventUpdate
         if interval is None:
@@ -942,11 +937,18 @@ def main(args=None):
 
         if 'range' not in selected and 'lassoPoints' not in selected:
             raise PreventUpdate
+        nums = None
         if 'range' in selected:
-            nums = [int(point) for point in selected['range']['x']]
+            for key in selected['range']:
+                if 'x' in key:
+                    nums = [int(point) for point in selected['range'][key]]
         if 'lassoPoints' in selected:
-            nums = [int(point) for point in selected['lassoPoints']['x']]
+            for key in selected['lassoPoints']:
+                if 'x' in key:
+                    nums = [int(point) for point in selected['lassoPoints'][key]]
 
+        if nums is None:
+            raise PreventUpdate
         ranges = [
             min(100, max(0, int((min(nums) - interval[0]) / windowsize * 100))),
             min(100, max(0, int((max(nums) - interval[0]) / windowsize * 100))),
@@ -955,7 +957,7 @@ def main(args=None):
 
 
     @app.callback(
-        Output(component_id="dragmode-selector", component_property="children"),
+        Output(component_id="dragmode-selector", component_property="data"),
         [Input(component_id="summary-plot", component_property="relayoutData"),
          ],
     )
@@ -966,24 +968,6 @@ def main(args=None):
         if "dragmode" not in relayout:
             raise PreventUpdate
         return relayout["dragmode"]
-
-    #@app.callback(
-    #    Output(component_id="dummy-div", component_property="children"),
-    #    [Input(component_id="clear-selection", component_property="n_clicks"),
-    #     Input(component_id="session-id", component_property="children"),
-    #     ],
-    #)
-    #@log_layer
-    #def clear_selection(clear, session_id):
-    #    if clear is None:
-    #       raise PreventUpdate
-    #    if session_id is None:
-    #       raise PreventUpdate
-    #    session[session_id] = ""
-    #    get_cells(session[session_id], {})
-
-    #    #cache.clear()
-    #    raise PreventUpdate
 
     ############
     # run server
