@@ -317,7 +317,6 @@ class TrackManager:
             layer="below",
             line_width=0,
         )
-        #return self.draw_highlight(fig, regs_)
 
     def draw_annotation(self, fig):
         if self.genes is not None:
@@ -347,56 +346,6 @@ class TrackManager:
 
         return fig
 
-def draw_highlight(fig, regs_):
-    hl = get_highlight(regs_)
-    if hl is None:
-        return fig
-    xmin, xmax = hl
-
-    return fig.add_shape(
-        type="rect",
-        xref='x',
-        yref='paper',
-        x0=xmin,
-        y0=0,
-        x1=xmax,
-        y1=1,
-        fillcolor="LightSalmon",
-        opacity=0.3,
-        layer="below",
-        line_width=0,
-    )
-
-
-#def draw_summary_figure_3(fig, regs_, plottype, yfield):
-#    if plottype == "bar":
-#        fig.add_trace(
-#            go.Bar(x=regs_.start, y=regs_[yfield], name=yfield), row=1, col=1,
-#        )
-#    else:
-#        fig.add_trace(
-#            go.Scatter(x=regs_.start, y=regs_[yfield],
-#                mode="lines", name=yfield,),
-#            row=1,
-#            col=1,
-#        )
-#
-#    rangeannot = regs_.apply(lambda row: f'{row.chrom}:{row.start}-{row.end}', axis=0).values.tolist()
-#    fig.add_trace(
-#        go.Scatter(
-#            x=regs_.start,
-#            y=regs_[yfield],
-#            mode="markers",
-#            opacity=0,
-#            hoverinfo="skip",
-#            customdata=rangeannot,
-#            hovertemplate="%{y}<br>%{customdata}",
-#            showlegend=False,
-#        ),
-#        row=1,
-#        col=1,
-#    )
-#    return fig
 
 
 def _draw_gene_annotation(fig, genes, chrom, start, end):
@@ -465,90 +414,10 @@ def _draw_gene_annotation(fig, genes, chrom, start, end):
         ]
         return plobjs
 
-def draw_gene_annotation(fig, genes, chrom, start, end):
-    wbed = BedTool([Interval(chrom, start, end)])
-    regions = genes.intersect(wbed)
-    xs = []
-    ys = []
-
-    midpoints = []
-    names = []
-    offset = 0
-    lastiv = []
-
-    rangeannot = []
-    for i, region in enumerate(regions):
-        names.append(region.name)
-
-        # draw arrow to indicate direction
-        if region.strand != "-":
-            xs += [
-                region.start,
-                region.start,
-                region.end,
-                region.end + 1000,
-                region.end,
-                region.start,
-                None,
-            ]
-            ys += [0, 1, 1, 0.5, 0, 0, None]
-            midpoints.append(region.start)
-        else:
-            xs += [
-                region.start,
-                region.start - 1000,
-                region.start,
-                region.end,
-                region.end,
-                region.start,
-                None,
-            ]
-            ys += [0, 0.5, 1, 1, 0, 0, None]
-            midpoints.append(region.end)
-        rangeannot.append(f"{region.chrom}:{region.start}-{region.end};{region.strand}")
-
-    if len(midpoints) > 0:
-        fig.add_trace(
-            go.Scatter(
-                x=xs,
-                y=ys,
-                mode="lines",
-                fill="toself",
-                name="Genes",
-                marker=dict(color="goldenrod"),
-            ),
-            row=12,
-            col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=midpoints,
-                y=[0.5] * len(midpoints),
-                text=names,
-                mode="text",
-                opacity=0.0,
-                name="Genes",
-                customdata=rangeannot,
-                hovertemplate="%{text}<br>%{customdata}",
-                showlegend=False,
-            ),
-            row=12,
-            col=1,
-        )
-        fig.layout["yaxis2"]["showticklabels"] = False
-        fig.layout["yaxis2"]["showgrid"] = False
-        fig.layout["yaxis2"]["zeroline"] = False
-        fig.layout["xaxis2"]["showgrid"] = False
-        fig.layout["xaxis2"]["zeroline"] = False
-    else:
-        fig.layout["xaxis"]["showticklabels"] = True
-    return fig
-
 
 
 def main(args=None):
     args = parser.parse_args(args=args)
-    #args = parser.parse_args()
 
     logging.basicConfig(filename = args.log,
                         level=logging.DEBUG,
@@ -598,7 +467,6 @@ def main(args=None):
     # instantiate app
     ##############
 
-    #import sess = session()
     app = dash.Dash("scbrowser")
 
     #print(dir(app))
@@ -673,6 +541,10 @@ def main(args=None):
                         id="session-id", children=session_id,
                         style={"display": "none"}
                     ),
+                    html.Div(
+                        id="dummy-div",
+                        style={"display": "none"}
+                    ),
                     html.Label(html.B("Annotation:")),
                     dcc.Dropdown(
                         id="annotation-selector",
@@ -683,6 +555,11 @@ def main(args=None):
                         ]
                         + [{"label": "None", "value": "None"}],
                         value="None",
+                    ),
+                    #html.Label(html.B("Clear selection:")),
+                    html.Button('Clear selection',
+                        id="clear-selection",
+                        n_clicks=0,
                     ),
                 ],
                 style=dict(width="69%", display="inline-block"),
@@ -942,15 +819,27 @@ def main(args=None):
         [
             Input(component_id="session-id", component_property="children"),
             Input(component_id="scatter-plot", component_property="selectedData"),
+            Input(component_id="clear-selection", component_property="n_clicks"),
         ],
     )
     @log_layer
-    def selection_store(session_id, selected):
+    def selection_store(session_id, selected, clicked):
+
+        ctx = dash.callback_context
+
+        if ctx.triggered is None:
+            raise PreventUpdate
+
+        if ctx.triggered[0]['prop_id'] == 'clear-selection.n_clicks':
+            session[session_id] = ""
+            get_cells(session[session_id])
+            return session[session_id]
+
         if selected is None:
             raise PreventUpdate
 
         if session_id in session:
-            prev_cells = get_cells(session[session_id])
+            prev_cells = get_cells(session[session_id]) or {}
         else:
             prev_cells = dict()
 
@@ -965,8 +854,6 @@ def main(args=None):
         session[session_id] = data_md5
 
         get_cells(session[session_id], cell_ids)
-        print('update', get_cells(session[session_id], cell_ids))
-        print('query', get_cells(session[session_id]))
         return session[session_id]
 
 
@@ -1080,6 +967,23 @@ def main(args=None):
             raise PreventUpdate
         return relayout["dragmode"]
 
+    #@app.callback(
+    #    Output(component_id="dummy-div", component_property="children"),
+    #    [Input(component_id="clear-selection", component_property="n_clicks"),
+    #     Input(component_id="session-id", component_property="children"),
+    #     ],
+    #)
+    #@log_layer
+    #def clear_selection(clear, session_id):
+    #    if clear is None:
+    #       raise PreventUpdate
+    #    if session_id is None:
+    #       raise PreventUpdate
+    #    session[session_id] = ""
+    #    get_cells(session[session_id], {})
+
+    #    #cache.clear()
+    #    raise PreventUpdate
 
     ############
     # run server
