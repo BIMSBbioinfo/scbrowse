@@ -537,8 +537,12 @@ def main(args=None):
                         + [{"label": "None", "value": "None"}],
                         value="None",
                     ),
-                    html.Button('Clear selection',
+                    html.Button('Clear all selections',
                         id="clear-selection",
+                        n_clicks=0,
+                    ),
+                    html.Button('Undo last selection',
+                        id="undo-last-selection",
                         n_clicks=0,
                     ),
                 ],
@@ -812,13 +816,14 @@ def main(args=None):
         [
             Input(component_id="scatter-plot", component_property="selectedData"),
             Input(component_id="clear-selection", component_property="n_clicks"),
+            Input(component_id="undo-last-selection", component_property="n_clicks"),
         ],
         [
             State("session-id", "data"),
         ],
     )
     @log_layer
-    def selection_store(selected, clicked, session_id):
+    def selection_store(selected, clicked, undolast, session_id):
 
         ctx = dash.callback_context
 
@@ -830,6 +835,17 @@ def main(args=None):
             logging.debug("CACHE CLEAR")
             session[session_id] = [""]
             get_cells(session[session_id][-1])
+            return session[session_id]
+
+        if ctx.triggered[0]['prop_id'] == 'undo-last-selection.n_clicks':
+            logging.debug('currently in session-store (to undo)', session[session_id])
+            logging.debug("undo last selectionR")
+            if len(session[session_id]) > 1:
+                session[session_id] = session[session_id][:-1]
+            else:
+                # don't pop if already empty
+                session[session_id] = [""]
+                get_cells(session[session_id][-1])
             return session[session_id]
 
         if selected is None:
