@@ -35,23 +35,23 @@ Installation
 ============
 
 Before installing scbrowser, please install bedtools and scregseg.
-
-Scregseg can be install using
+The following lines show how to install the requirements and scbrowse into
+a new conda environment.
 
 ::
+
+    conda create -n scbrowse python=3.7
+    conda activate scbrowse
+    conda install -c bioconda bedtools
 
     pip install janggu[tf]
     pip install https://github.com/BIMSBbioinfo/scregseg/archive/master.zip
 
 
+    git clone https://github.com/BIMSBbioinfo/scbrowse
+    pip install -e scbrowse[gunicorn]
+
 ::
-
-#    pip install scbrowse
-#
-#You can also install the in-development version with::
-
-    pip install https://github.com/wkopp/python-scbrowse/archive/master.zip
-
 
 Data preparation
 ================
@@ -85,24 +85,39 @@ An arbitrary number of additional columns with prefix `annot.`
 can be added with categorical labels. They can be selected for
 coloring the cells.
 
-Using scbrowse
-=================
+Using scbrowse (development mode)
+=================================
 
-scbrowse can be launched according to
+To launch scbrowse in development mode, use first set the environment variables
+to point to the input files
 
 ::
 
-    scbrowse -embedding <embedding.tsv> -matrix <countmatrix.npz> -bed <tile.bed> -genes <genes.bed>
+    export SCBROWSE_EMBEDDING=<embedding.tsv>
+    export SCBROWSE_MATRIX=<matrix.npz>
+    export SCBROWSE_REGIONS=<regions.bed>
+    export SCBROWSE_GENES=<genes.bed>
+    export SCBROWSE_LOGS=<scbrowse.log>
+    scbrowse
 
 
-Afterwards you can browse the data in a web-browser by opening
+Afterwards you can browse the data locally in a web-browser by opening
 https://localhost:8051
 
+Deploy scbrowse in production mode
+==================================
 
-Documentation
-=============
+The simplest way to deploy scbrowse using gunicorn is
+to adjust the :code:`startup.sh`.
+It requires to specify the input file locations using a set of
+environment variables.
+Subsequently, it launches the application using gunicorn.
 
+::
 
-https://python-scbrowse.readthedocs.io/
+    sh startup.sh
+
+Afterwards you can browse the data locally in a web-browser by opening
+https://localhost:8000
 
 
