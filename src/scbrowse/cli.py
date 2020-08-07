@@ -42,36 +42,6 @@ import pandas as pd
 from scregseg.countmatrix import CountMatrix
 import uuid
 
-#if __name__ == '__main__':
-#    parser = argparse.ArgumentParser(description="single-cell Explorer")
-#
-#    parser.add_argument(
-#        "-embedding", dest="embedding", type=str,
-#        help="Table with 2D embedding of cells"
-#    )
-#    parser.add_argument("-matrix", dest="matrix", type=str, help="Count matrix")
-#    parser.add_argument("-regions", dest="regions", type=str, help="regions BED file")
-#    parser.add_argument(
-#        "-genes", dest="genes", type=str, help="Gene annotation in BED12 format"
-#    )
-#    parser.add_argument(
-#        '-port', dest='port', type=int,
-#        default=8051,
-#        help="Port to use for the web app"
-#    )
-#    parser.add_argument(
-#        '-log', dest='log', type=str,
-#        default='scbrower.log',
-#        help="Port to use for the web app"
-#    )
-#    args = parser.parse_args()
-#    args = dict(embedding=args.embedding,
-#                matrix=args.matrix,
-#                regions=args.regions,
-#                genes=args.genes,
-#                port=args.port,
-#                logs=args.log)
-#else:
 args = dict(embedding=os.environ['SCBROWSE_EMBEDDING'],
             matrix=os.environ['SCBROWSE_MATRIX'],
             regions=os.environ['SCBROWSE_REGIONS'],
@@ -79,7 +49,6 @@ args = dict(embedding=os.environ['SCBROWSE_EMBEDDING'],
             port=8051,
             logs=os.environ['SCBROWSE_LOGS'])
 
-print(args)
 colors = px.colors.qualitative.Light24
 
 ###############
@@ -535,7 +504,6 @@ def get_region_selection(session_id, chrom, interval, highlight):
 
 def make_server():
     session_id = str(uuid.uuid4())
-    print(session_id)
     return html.Div(
     [
         html.Div(
@@ -763,7 +731,6 @@ def update_scatter(annot):
         Input(component_id="chrom-selector", component_property="value"),
         Input(component_id="locus-selector", component_property="value"),
         Input(component_id="plot-type-selector", component_property="value"),
-        Input(component_id="scatter-plot", component_property="selectedData"),
         Input(component_id="highlight-selector", component_property="value"),
         Input(component_id="dragmode-selector", component_property="data"),
         Input(component_id="normalize-selector", component_property="value"),
@@ -776,7 +743,7 @@ def update_scatter(annot):
     ],
 )
 @log_layer
-def update_summary(chrom, interval, plottype, selected,
+def update_summary(chrom, interval, plottype,
                    highlight, dragmode, normalize, overlay,
                    annotation, selectionstore, session_id):
     normalize = True if normalize == "Yes" else False
@@ -846,15 +813,11 @@ def selection_store(selected, clicked, undolast, session_id):
         raise PreventUpdate
 
     if ctx.triggered[0]['prop_id'] == 'clear-selection.n_clicks':
-        #logging.debug('currently in session-store (to clear): %s', session[session_id])
-        logging.debug("CACHE CLEAR")
         session[session_id] = [""]
         get_cells(session[session_id][-1])
         return session[session_id]
 
     if ctx.triggered[0]['prop_id'] == 'undo-last-selection.n_clicks':
-        #logging.debug('currently in session-store (to undo) %s', session[session_id])
-        logging.debug("undo last selectionR")
         if len(session[session_id]) > 1:
             session[session_id] = session[session_id][:-1]
         else:
@@ -897,7 +860,6 @@ def selection_store(selected, clicked, undolast, session_id):
     [
         Input(component_id="chrom-selector", component_property="value"),
         Input(component_id="locus-selector", component_property="value"),
-        Input(component_id="scatter-plot", component_property="selectedData"),
         Input(component_id="highlight-selector", component_property="value"),
         Input(component_id="annotation-selector", component_property="value"),
         Input(component_id="selection-store", component_property="data"),
@@ -907,7 +869,7 @@ def selection_store(selected, clicked, undolast, session_id):
     ],
 )
 @log_layer
-def update_statistics(chrom, interval, selected,
+def update_statistics(chrom, interval,
                       highlight, annotation, selectionstore, session_id):
     if chrom is None:
         raise PreventUpdate
@@ -1016,9 +978,7 @@ def main():
     ############
     # run server
     ############
-    #print(args)
     app.run_server(debug=True, port=args['port'])
 
 if __name__ == '__main__':
-    print('__name__', args)
     main()
