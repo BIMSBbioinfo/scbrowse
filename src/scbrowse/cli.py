@@ -16,6 +16,7 @@ Why does this file exist, and why not put this in __main__?
 """
 import argparse
 from functools import wraps
+from copy import copy
 import logging
 import argparse
 import dash  # pylint: disable=import-error
@@ -219,7 +220,7 @@ class TrackManager:
         self.init_trace()
 
     def allocate(self):
-        if not self.controlprops['separated']:
+        if not self.controlprops['overlay']:
             ntracks = 1
         else:
             ntracks = len(self.tracknames)
@@ -270,7 +271,7 @@ class TrackManager:
         self.itrace = 1
 
     def next_trace(self):
-        if self.controlprops['separated']:
+        if self.controlprops['overlay']:
             self.itrace += self.trackheight
 
     def extend_trace(self, fig, plobjs):
@@ -316,7 +317,7 @@ class TrackManager:
 
     def draw_annotation(self, fig):
         if self.genes is not None:
-            ntracks = len(self.tracknames) if self.controlprops['separated'] else 1
+            ntracks = len(self.tracknames) if self.controlprops['overlay'] else 1
             chrom, start, end = self.locus
             plobjs = _draw_gene_annotation(fig, self.genes, chrom, start, end)
             for plobj in plobjs:
@@ -603,7 +604,7 @@ def main(args=None):
                     html.Div([
                         html.Label(html.B("Overlay tracks:")),
                         dcc.RadioItems(
-                            id="separate-track-selector",
+                            id="overlay-track-selector",
                             options=[
                                 {"label": "No", "value": "No"},
                                 {"label": "Yes", "value": "Yes"},
@@ -747,7 +748,7 @@ def main(args=None):
             Input(component_id="highlight-selector", component_property="value"),
             Input(component_id="dragmode-selector", component_property="data"),
             Input(component_id="normalize-selector", component_property="value"),
-            Input(component_id="separate-track-selector", component_property="value"),
+            Input(component_id="overlay-track-selector", component_property="value"),
             Input(component_id="annotation-selector", component_property="value"),
             Input(component_id="selection-store", component_property="data"),
         ],
@@ -757,9 +758,10 @@ def main(args=None):
     )
     @log_layer
     def update_summary(chrom, interval, plottype, selected,
-                       highlight, dragmode, normalize, separated, annotation, selectionstore, session_id):
+                       highlight, dragmode, normalize, overlay,
+                       annotation, selectionstore, session_id):
         normalize = True if normalize == "Yes" else False
-        separated = True if separated == "Yes" else False
+        overlay = True if overlay == "Yes" else False
 
         if chrom is None:
             raise PreventUpdate
@@ -785,7 +787,8 @@ def main(args=None):
 
         if session_id in session:
             # get cells from the cell selection store
-            selcells = get_cells(session[session_id])
+            logging.debug('currently in session-store (update summary)', session[session_id])
+            selcells = get_cells(session[session_id][-1])
             for selcell in selcells or []:
                 cell_ids = selcells[selcell]
                 regs_.loc[:,selcell] = cell_coverage(cmat, regs_.index, cell_ids)
@@ -795,8 +798,7 @@ def main(args=None):
 
         controlprops = {'plottype': plottype,
                         'dragmode': dragmode,
-                        'separated': separated}
-                        #'annotation': annotation}
+                        'overlay': overlay}
 
         trackmanager = TrackManager(regs_, tracknames,
                                     genes, controlprops)
@@ -824,16 +826,20 @@ def main(args=None):
             raise PreventUpdate
 
         if ctx.triggered[0]['prop_id'] == 'clear-selection.n_clicks':
-            session[session_id] = ""
-            get_cells(session[session_id])
+            logging.debug('currently in session-store (to clear)', session[session_id])
+            logging.debug("CACHE CLEAR")
+            session[session_id] = [""]
+            get_cells(session[session_id][-1])
             return session[session_id]
 
         if selected is None:
             raise PreventUpdate
 
         if session_id in session:
-            prev_cells = get_cells(session[session_id]) or {}
+            prev_cells = copy(get_cells(session[session_id][-1])) or {}
+            prev_datahash = session[session_id]
         else:
+            prev_datahash = []
             prev_cells = dict()
 
         # got some new selected points
@@ -841,13 +847,18 @@ def main(args=None):
         cell_ids = {f'sel_{len(prev_cells)}':
                     cmat.cannot[cmat.cannot.cell.isin(sel)].index.tolist()}
 
-        cell_ids.update(prev_cells)
+        prev_cells.update(cell_ids)
 
-        data_md5 = hashlib.md5(str(json.dumps(cell_ids, sort_keys=True)).encode('utf-8')).hexdigest()
-        session[session_id] = data_md5
+        new_cells = prev_cells
 
-        get_cells(session[session_id], cell_ids)
-        return session[session_id]
+        data_md5 = hashlib.md5(str(json.dumps(
+            new_cells, sort_keys=True)).encode('utf-8')).hexdigest()
+
+        session[session_id] = prev_datahash + [data_md5]
+
+        logging.debug('updated in session-store', session[session_id])
+        get_cells(session[session_id][-1], new_cells)
+        return session[session_id][-1]
 
 
     @app.callback(
@@ -895,8 +906,9 @@ def main(args=None):
                 tablemanager.add_row(trackname, n11, c1, r1, n, len(cell_ids))
 
         if session_id in session:
+            logging.debug('currently in session-store (update_statistics)', session[session_id])
             # get cells from the cell selection store
-            selcells = get_cells(session[session_id])
+            selcells = get_cells(session[session_id][-1])
             for selcell in selcells or []:
                 cell_ids = selcells[selcell]
 
