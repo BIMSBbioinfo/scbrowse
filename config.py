@@ -1,7 +1,7 @@
-import os
-
 bind = ':8000'
 workers = 4
 chdir = './src/scbrowse'
-accesslog = os.path.join(os.environ['SCBROWSE_LOGDIR'], 'access_gunicorn.log')
-errorlog = os.path.join(os.environ['SCBROWSE_LOGDIR'], 'error_gunicorn.log')
+accesslog = '/mnt/storage/wolfgang/wolfgang/src/scbrowse-logs/access_gunicorn.log'
+errorlog = '/mnt/storage/wolfgang/wolfgang/src/scbrowse-logs/error_gunicorn.log'
+graceful_timeout = 60
+timeout=60
