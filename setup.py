@@ -38,7 +38,7 @@ setup(
     ),
     author='Wolfgang Kopp',
     author_email='wolfgang.kopp@mdc-berlin.de',
-    url='https://github.com/wkopp/python-scbrowse',
+    url='https://github.com/BIMSBbioinfo/scbrowse',
     packages=find_packages('src'),
     package_dir={'': 'src'},
     py_modules=[splitext(basename(path))[0] for path in glob('src/*.py')],
@@ -57,9 +57,9 @@ setup(
         'Private :: Do Not Upload',
     ],
     project_urls={
-        'Documentation': 'https://python-scbrowse.readthedocs.io/',
-        'Changelog': 'https://python-scbrowse.readthedocs.io/en/latest/changelog.html',
-        'Issue Tracker': 'https://github.com/wkopp/python-scbrowse/issues',
+        'Documentation': 'https://scbrowse.readthedocs.io/',
+        'Changelog': 'https://scbrowse.readthedocs.io/en/latest/changelog.html',
+        'Issue Tracker': 'https://github.com/BIMSBbioinfo/scbrowse/issues',
     },
     keywords=[
         'single-cell ATAC-seq', 'interactive', 'browser',
