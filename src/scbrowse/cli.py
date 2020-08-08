@@ -21,6 +21,7 @@ from copy import copy
 import logging
 import argparse
 import dash  # pylint: disable=import-error
+import dash_table
 from dash.exceptions import PreventUpdate
 import dash_core_components as dcc  # pylint: disable=import-error
 import dash_html_components as html  # pylint: disable=import-error
@@ -120,36 +121,39 @@ def get_highlight(regs_):
     xmax = sregs_.end.max()
     return [xmin, xmax]
 
+
 class TableManager:
     def __init__(self, regs_):
+        print("new tablemanager")
         self.regs_ = regs_
-        self.tracknames = []
-        self.n_highlight = []
-        self.n_outside = []
-        self.odds = []
-        self.pvalues = []
+        self.header = ["Name", "Highlight", "Outside", "Log-Odds", "P-value"]
+        self.data = {h: [] for h in self.header}
+        self.nrows = 0
 
     def draw(self):
-        if len(self.tracknames) <=0:
+        if self.nrows <=0:
             return ""
-        return html.Table(
-               self.draw_header() +
-               self.draw_rows()
-           )
+        ni = len(px.colors.qualitative.Light24)
+        return dash_table.DataTable(
+          id='datatable',
+          columns=self.draw_header(),
+          data=self.draw_rows(),
+          style_cell={
+             'whiteSpace': 'normal',
+             'height': 'auto',
+         },
+          style_cell_conditional=
+          [
+             {'if': {'column_id': 'Name'},
+              'width': '10%'},
+          ],
+          page_action='none',
+          style_table={'height': '300px', 'overflowY': 'auto',
+                       }
+        )
 
     def draw_header(self):
-        return [html.Thead([
-                html.Tr(
-                    [
-                        html.Th("Name"),
-                        html.Th("Highlight"),
-                        html.Th("Outside"),
-                        #html.Th("Total"),
-                        html.Th("Odds-ratio"),
-                        html.Th("P-value"),
-                    ]
-                ),
-        ])]
+        return [{'name': h, 'id': h} for h in self.header]
 
     def add_row(self, name, n11, c1, r1, n, ncells):
         n21 = c1 - n11
@@ -158,34 +162,16 @@ class TableManager:
         odds, pval = fisher_exact([[n11, n12],
                                    [n21, n22]],
                                   alternative='greater')
-        self.tracknames.append(f'{name} ({ncells}):')
-        self.n_highlight.append(n11)
-        self.n_outside.append(n21)
-        self.odds.append(odds)
-        self.pvalues.append(pval)
-
-    def init_row(self):
-        self.irow = 0
-
-    def next_row(self):
-        self.irow += 1
+        self.data[self.header[0]].append(f'{name} ({ncells})')
+        self.data[self.header[1]].append(n11)
+        self.data[self.header[2]].append(n21)
+        self.data[self.header[3]].append('{:.3f}'.format(np.log2(odds)))
+        self.data[self.header[4]].append('{:.3f}'.format(pval))
+        self.nrows += 1
 
     def draw_rows(self):
-        return [html.Tbody([
-            self.draw_row(i) for i, _ in enumerate(self.tracknames)])
-        ]
-
-    def draw_row(self, irow):
-        row = html.Tr([html.Td(self.tracknames[irow]),
-                        html.Td(self.n_highlight[irow]),
-                        html.Td(self.n_outside[irow]),
-                        #html.Td(self.n_outside[irow] + self.n_highlight[irow]),
-                        html.Td('%.3f' % self.odds[irow]),
-                        html.Td('%.3f' % self.pvalues[irow]),
-                       ]
-                      )
-
-        return row
+        return [{h: self.data[h][irow] for h in self.header} \
+                for irow in range(self.nrows)]
 
 
 
@@ -448,6 +434,8 @@ genelocus = [dict(label=g.name, value=f'{g.chrom}:{g.start}-{g.end}') for g in g
 ##############
 
 server = Flask("scbrowse")
+server.secret_key = 'asdfEdaerAcGYaD'
+
 app = dash.Dash("scbrowse", server=server)
 
 app.title = "scbrowser"
@@ -463,7 +451,6 @@ cache = Cache(app.server, config={
     # higher numbers will store more data in the filesystem / redis cache
     'CACHE_THRESHOLD': 200
 })
-app.server.secret_key = 'asdfEdaerAcGYaD'
 
 def get_cells(session_id, cells=None):
     @cache.memoize()
@@ -504,6 +491,7 @@ def get_region_selection(session_id, chrom, interval, highlight):
 
 def make_server():
     session_id = str(uuid.uuid4())
+    #session_id = 'session'
     return html.Div(
     [
         html.Div(
