@@ -124,7 +124,6 @@ def get_highlight(regs_):
 
 class TableManager:
     def __init__(self, regs_):
-        print("new tablemanager")
         self.regs_ = regs_
         self.header = ["Name", "Highlight", "Outside", "Log-Odds", "P-value"]
         self.data = {h: [] for h in self.header}
@@ -493,7 +492,6 @@ def make_server():
     [
         html.Div(
             [
-                html.Div(id="stats-field"),
                 html.Label(html.B("Annotation:")),
                 dcc.Dropdown(
                     id="annotation-selector",
@@ -532,7 +530,7 @@ def make_server():
                                  options=options,
                                  disabled=True,
                                  style=dict(width="70%", display="inline-block"),),
-                ],),
+                ],style={'display': 'none'}),
                 html.Div([
                     html.Label(html.B("Position:")),
                     dcc.RangeSlider(
@@ -542,7 +540,7 @@ def make_server():
                         step=1000,
                         disabled=True,
                         value=[1, 1000000],),
-                ],),
+                ],style={'display': 'none'}),
                 html.Div([
                     html.Label(html.B("Highlight:")),
                     dcc.RangeSlider(
@@ -591,22 +589,27 @@ def make_server():
         ),
         html.Br(),
         html.Div(
-            [dcc.Graph(id="scatter-plot", style={'height': '700px'})],
+            [dcc.Graph(id="scatter-plot", style={'height': '500px'})],
             style=dict(width="49%", display="inline-block"),
         ),
         html.Div(
             [
-                dcc.Graph(id="summary-plot", style={'height': '700px'}),
+                dcc.Graph(id="summary-plot", style={'height': '500px'}),
             ],
             style=dict(width="49%", display="inline-block"),
         ),
         html.Br(),
+        html.Div([
+                html.Div(id="stats-field"),
                 dcc.Store(
                     id="dragmode-selector", data="select",
                 ),
                 dcc.Store(
                     id="selection-store", data=None,
                 ),
+        ],
+        style=dict(width="49%", display="inline-block"),
+        ),
     ],
     className="container",
 )
