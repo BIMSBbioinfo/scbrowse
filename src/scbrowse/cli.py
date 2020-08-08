@@ -30,7 +30,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from scipy.stats import fisher_exact
 from flask_caching import Cache
-from flask import session, Flask
+from flask import Flask
 import hashlib
 import json
 
@@ -434,7 +434,6 @@ genelocus = [dict(label=g.name, value=f'{g.chrom}:{g.start}-{g.end}') for g in g
 ##############
 
 server = Flask("scbrowse")
-server.secret_key = 'asdfEdaerAcGYaD'
 
 app = dash.Dash("scbrowse", server=server)
 
@@ -452,16 +451,16 @@ cache = Cache(app.server, config={
     'CACHE_THRESHOLD': 200
 })
 
-def get_cells(session_id, cells=None):
+def get_cells(datahash, cells=None):
     @cache.memoize()
-    def _get_cells(session_id):
+    def _get_cells(datahash):
         return cells
 
-    return _get_cells(session_id)
+    return _get_cells(datahash)
 
-def get_region_selection(session_id, chrom, interval, highlight):
+def get_region_selection(chrom, interval, highlight):
     @cache.memoize()
-    def _get_region_selection(session_id, chrom, interval, highlight):
+    def _get_region_selection(chrom, interval, highlight):
 
         regs_ = regs.copy()
         start, end = interval
@@ -482,7 +481,7 @@ def get_region_selection(session_id, chrom, interval, highlight):
         )
         return regs_.to_json()
 
-    return pd.read_json(_get_region_selection(session_id, chrom, interval, highlight))
+    return pd.read_json(_get_region_selection(chrom, interval, highlight))
 
 
 ##############
@@ -490,8 +489,6 @@ def get_region_selection(session_id, chrom, interval, highlight):
 ##############
 
 def make_server():
-    session_id = str(uuid.uuid4())
-    #session_id = 'session'
     return html.Div(
     [
         html.Div(
@@ -610,9 +607,6 @@ def make_server():
                 dcc.Store(
                     id="selection-store", data=None,
                 ),
-                dcc.Store(
-                    id="session-id", data=session_id,
-                ),
     ],
     className="container",
 )
@@ -726,14 +720,11 @@ def update_scatter(annot):
         Input(component_id="annotation-selector", component_property="value"),
         Input(component_id="selection-store", component_property="data"),
     ],
-    [
-        State("session-id", "data"),
-    ],
 )
 @log_layer
 def update_summary(chrom, interval, plottype,
                    highlight, dragmode, normalize, overlay,
-                   annotation, selectionstore, session_id):
+                   annotation, selectionstore):
     normalize = True if normalize == "Yes" else False
     overlay = True if overlay == "Yes" else False
 
@@ -742,7 +733,7 @@ def update_summary(chrom, interval, plottype,
     if interval is None:
         raise PreventUpdate
 
-    regs_ = get_region_selection(session_id, chrom, interval, highlight)
+    regs_ = get_region_selection(chrom, interval, highlight)
 
     tracknames = ['total_coverage']
     if normalize:
@@ -759,10 +750,9 @@ def update_summary(chrom, interval, plottype,
                 regs_.loc[:,trackname] /= readsincell[cell_ids].sum()*1e5
 
 
-    if session_id in session:
+    if selectionstore is not None:
         # get cells from the cell selection store
-        #logging.debug('currently in session-store (update summary)', session[session_id])
-        selcells = get_cells(session[session_id][-1])
+        selcells = get_cells(selectionstore[-1])
         for selcell in selcells or []:
             cell_ids = selcells[selcell]
             regs_.loc[:,selcell] = cell_coverage(cmat, regs_.index, cell_ids)
@@ -789,11 +779,11 @@ def update_summary(chrom, interval, plottype,
         Input(component_id="undo-last-selection", component_property="n_clicks"),
     ],
     [
-        State("session-id", "data"),
+        State("selection-store", "data"),
     ],
 )
 @log_layer
-def selection_store(selected, clicked, undolast, session_id):
+def selection_store(selected, clicked, undolast, prev_hash):
 
     ctx = dash.callback_context
 
@@ -801,27 +791,26 @@ def selection_store(selected, clicked, undolast, session_id):
         raise PreventUpdate
 
     if ctx.triggered[0]['prop_id'] == 'clear-selection.n_clicks':
-        session[session_id] = [""]
-        get_cells(session[session_id][-1])
-        return session[session_id]
+        new_hash = [""]
+        get_cells(new_hash[-1])
+        return new_hash
 
     if ctx.triggered[0]['prop_id'] == 'undo-last-selection.n_clicks':
-        if len(session[session_id]) > 1:
-            session[session_id] = session[session_id][:-1]
+        if prev_hash is not None and len(prev_hash) > 1:
+            new_hash = prev_hash[:-1]
         else:
             # don't pop if already empty
-            session[session_id] = [""]
-            get_cells(session[session_id][-1])
-        return session[session_id]
+            new_hash = [""]
+            get_cells(new_hash[-1])
+        return new_hash
 
     if selected is None:
         raise PreventUpdate
 
-    if session_id in session:
-        prev_cells = copy(get_cells(session[session_id][-1])) or {}
-        prev_datahash = session[session_id]
+    if prev_hash is not None:
+        prev_cells = copy(get_cells(prev_hash[-1])) or {}
     else:
-        prev_datahash = []
+        prev_hash = []
         prev_cells = dict()
 
     # got some new selected points
@@ -829,18 +818,16 @@ def selection_store(selected, clicked, undolast, session_id):
     cell_ids = {f'sel_{len(prev_cells)}':
                 cmat.cannot[cmat.cannot.cell.isin(sel)].index.tolist()}
 
-    prev_cells.update(cell_ids)
-
-    new_cells = prev_cells
+    new_cells = copy(prev_cells)
+    new_cells.update(cell_ids)
 
     data_md5 = hashlib.md5(str(json.dumps(
         new_cells, sort_keys=True)).encode('utf-8')).hexdigest()
 
-    session[session_id] = prev_datahash + [data_md5]
+    new_hash = prev_hash + [data_md5]
 
-    #logging.debug('updated in session-store %s', session[session_id])
-    get_cells(session[session_id][-1], new_cells)
-    return session[session_id][-1]
+    get_cells(new_hash[-1], new_cells)
+    return new_hash
 
 
 @app.callback(
@@ -852,20 +839,17 @@ def selection_store(selected, clicked, undolast, session_id):
         Input(component_id="annotation-selector", component_property="value"),
         Input(component_id="selection-store", component_property="data"),
     ],
-    [
-        State("session-id", "data"),
-    ],
 )
 @log_layer
 def update_statistics(chrom, interval,
-                      highlight, annotation, selectionstore, session_id):
+                      highlight, annotation, selectionstore):
     if chrom is None:
         raise PreventUpdate
     if interval is None:
         raise PreventUpdate
 
     start, end = interval
-    regs_ = get_region_selection(session_id, chrom, interval, highlight)
+    regs_ = get_region_selection(chrom, interval, highlight)
 
     regs_ = regs_[regs_.highlight == "inside"]
 
@@ -886,10 +870,9 @@ def update_statistics(chrom, interval,
             n = readsincell.sum()
             tablemanager.add_row(trackname, n11, c1, r1, n, len(cell_ids))
 
-    if session_id in session:
-        #logging.debug('currently in session-store (update_statistics)', session[session_id])
+    if selectionstore is not None:
         # get cells from the cell selection store
-        selcells = get_cells(session[session_id][-1])
+        selcells = get_cells(selectionstore[-1])
         for selcell in selcells or []:
             cell_ids = selcells[selcell]
 
