@@ -126,7 +126,6 @@ def data_bars_diverging(data, column, color_above='#3D9970', color_below='#FF413
     data = [float(d) for d in data[column]]
     n_bins = 100
     bounds = [i * (1.0 / n_bins) for i in range(n_bins + 1)]
-    print(data)
     col_max = 3.
     col_min = -3.
     #col_max = pd.Series(data).max()
@@ -524,6 +523,13 @@ def get_cells(datahash, cells=None):
 
     return _get_cells(datahash)
 
+def get_selection(datahash, selection=None):
+    @cache.memoize()
+    def _get_selection(datahash):
+        return selection
+
+    return _get_selection(datahash)
+
 def get_region_selection(chrom, interval, highlight):
     @cache.memoize()
     def _get_region_selection(chrom, interval, highlight):
@@ -669,7 +675,10 @@ def make_server():
         html.Div([
                 html.Div(id="stats-field"),
                 dcc.Store(
-                    id="dragmode-selector", data="select",
+                    id="dragmode-track", data="select",
+                ),
+                dcc.Store(
+                    id="dragmode-scatter", data="select",
                 ),
                 dcc.Store(
                     id="selection-store", data=None,
@@ -745,17 +754,31 @@ def update_locus_selector_value(coord, relayout):
 
 @app.callback(
     Output(component_id="scatter-plot", component_property="figure"),
-    [Input(component_id="annotation-selector", component_property="value")],
+    [
+     Input(component_id="annotation-selector", component_property="value"),
+     Input(component_id="selection-store", component_property="data"),
+    ],
+    [
+     State(component_id="dragmode-scatter", component_property="data"),
+    ]
 )
 @log_layer
-def update_scatter(annot):
+def update_scatter(annot, selection_store, dragmode):
     ni = len(colors)
-    #tracknames = df[annotation].unique()
     co = {}
     if annot in emb.columns:
         tracknames = sorted(emb[annot].unique().tolist())
-        co = {trackname: colors[i%ni] for i, \
-              trackname in enumerate(tracknames)}
+    else:
+        tracknames = ['None']
+
+    if selection_store is not None and len(selection_store) > 0:
+       selection_hash = selection_store[-1]
+       selection = get_selection(selection_hash)
+       tracknames += [selkey for selkey in selection]
+
+    co = {trackname: colors[i%ni] for i, \
+          trackname in enumerate(tracknames)}
+
     fig = px.scatter(
         emb,
         x="dim1",
@@ -769,10 +792,28 @@ def update_scatter(annot):
         template="plotly_white",
     )
 
+    print(selection_store)
+    if selection_store is not None and len(selection_store) > 0:
+       selection_hash = selection_store[-1]
+       selection = get_selection(selection_hash)
+
+       print(selection_hash, selection)
+       for selkey in selection:
+           fig.add_trace(go.Scatter(x=selection[selkey]['x'],
+                                    y=selection[selkey]['y'],
+                                    text=selkey,
+                                    name=selkey,
+                                    fillcolor=co[selkey],
+                                    opacity=0.2,
+                                    mode='lines',
+                                    hoverinfo='skip',
+                                    line_width=0,
+                                    fill='toself'))
     fig.update_traces(marker=dict(size=3))
     # fig.update_data
     fig.update_layout(clickmode="event+select",
-                      template='plotly_white')
+                      template='plotly_white',
+                      dragmode=dragmode)
 
     return fig
 
@@ -784,17 +825,19 @@ def update_scatter(annot):
         Input(component_id="locus-selector", component_property="value"),
         Input(component_id="plot-type-selector", component_property="value"),
         Input(component_id="highlight-selector", component_property="value"),
-        Input(component_id="dragmode-selector", component_property="data"),
         Input(component_id="normalize-selector", component_property="value"),
         Input(component_id="overlay-track-selector", component_property="value"),
         Input(component_id="annotation-selector", component_property="value"),
         Input(component_id="selection-store", component_property="data"),
     ],
+    [
+        State(component_id="dragmode-track", component_property="data"),
+    ],
 )
 @log_layer
 def update_summary(chrom, interval, plottype,
-                   highlight, dragmode, normalize, overlay,
-                   annotation, selectionstore):
+                   highlight, normalize, overlay,
+                   annotation, selectionstore, dragmode):
     normalize = True if normalize == "Yes" else False
     overlay = True if overlay == "Yes" else False
 
@@ -863,6 +906,7 @@ def selection_store(selected, clicked, undolast, prev_hash):
     if ctx.triggered[0]['prop_id'] == 'clear-selection.n_clicks':
         new_hash = [""]
         get_cells(new_hash[-1])
+        get_selection(new_hash[-1], dict())
         return new_hash
 
     if ctx.triggered[0]['prop_id'] == 'undo-last-selection.n_clicks':
@@ -872,6 +916,7 @@ def selection_store(selected, clicked, undolast, prev_hash):
             # don't pop if already empty
             new_hash = [""]
             get_cells(new_hash[-1])
+            get_selection(new_hash[-1], dict())
         return new_hash
 
     if selected is None:
@@ -879,17 +924,36 @@ def selection_store(selected, clicked, undolast, prev_hash):
 
     if prev_hash is not None:
         prev_cells = copy(get_cells(prev_hash[-1])) or {}
+        prev_selection = copy(get_selection(prev_hash[-1])) or {}
     else:
         prev_hash = []
         prev_cells = dict()
+        prev_selection = dict()
 
+    selname = f'sel_{len(prev_cells)}'
     # got some new selected points
     sel = [point["customdata"][0] for point in selected["points"]]
-    cell_ids = {f'sel_{len(prev_cells)}':
+    cell_ids = {selname:
                 cmat.cannot[cmat.cannot.cell.isin(sel)].index.tolist()}
+
+    selectionpoints = dict()
+    if 'range' in selected:
+        name = 'range'
+        xs = [point for point in selected[name]['x']]
+        ys = [point for point in selected[name]['y']]
+        selectionpoints[selname] = dict(x=[xs[0], xs[0], xs[1], xs[1], xs[0]],
+                                        y=[ys[0], ys[1], ys[1], ys[0], ys[0]])
+    if 'lassoPoints' in selected:
+        name = 'lassoPoints'
+        selectionpoints[selname] = \
+           {k: [point for point in selected[name][k]] for k in selected[name]}
+        selectionpoints[selname]['x'].append(selectionpoints[selname]['x'][0])
+        selectionpoints[selname]['y'].append(selectionpoints[selname]['y'][0])
 
     new_cells = copy(prev_cells)
     new_cells.update(cell_ids)
+    new_selection = copy(prev_selection)
+    new_selection.update(selectionpoints)
 
     data_md5 = hashlib.md5(str(json.dumps(
         new_cells, sort_keys=True)).encode('utf-8')).hexdigest()
@@ -897,6 +961,8 @@ def selection_store(selected, clicked, undolast, prev_hash):
     new_hash = prev_hash + [data_md5]
 
     get_cells(new_hash[-1], new_cells)
+    get_selection(new_hash[-1], new_selection)
+
     return new_hash
 
 
@@ -1003,12 +1069,25 @@ def update_highlight_selector(interval, selected):
 
 
 @app.callback(
-    Output(component_id="dragmode-selector", component_property="data"),
+    Output(component_id="dragmode-track", component_property="data"),
     [Input(component_id="summary-plot", component_property="relayoutData"),
      ],
 )
 @log_layer
 def update_dragmode_selector(relayout):
+    if relayout is None:
+        raise PreventUpdate
+    if "dragmode" not in relayout:
+        raise PreventUpdate
+    return relayout["dragmode"]
+
+@app.callback(
+    Output(component_id="dragmode-scatter", component_property="data"),
+    [Input(component_id="scatter-plot", component_property="relayoutData"),
+     ],
+)
+@log_layer
+def update_dragmode_scatter(relayout):
     if relayout is None:
         raise PreventUpdate
     if "dragmode" not in relayout:
