@@ -2,30 +2,6 @@
 Overview
 ========
 
-.. start-badges
-
-.. list-table::
-    :stub-columns: 1
-
-    * - docs
-      - |docs|
-    * - tests
-      - |
-        |
-    * - package
-      - | |commits-since|
-.. |docs| image:: https://readthedocs.org/projects/python-scbrowse/badge/?style=flat
-    :target: https://readthedocs.org/projects/python-scbrowse
-    :alt: Documentation Status
-
-.. |commits-since| image:: https://img.shields.io/github/commits-since/wkopp/python-scbrowse/v0.0.0.svg
-    :alt: Commits since latest release
-    :target: https://github.com/wkopp/python-scbrowse/compare/v0.0.0...master
-
-
-
-.. end-badges
-
 SCbrowse is an interactive browser for single-cell ATAC-seq data.
 It allows to simultaneously explore the accessibility patterns
 of selected cells in the embedding space and for selected genomic regions.
@@ -34,7 +10,6 @@ The tools freely available under a GNU Lesser General Public License v3 or later
 Installation
 ============
 
-Before installing scbrowser, please install bedtools and scregseg.
 The following lines show how to install the requirements and scbrowse into
 a new conda environment.
 
@@ -60,13 +35,14 @@ SCbrowse needs two required ingredients:
 
 1. A genome-wide count matrix
 2. 2D embedding of the cells
+3. Gene annotation in bed format 
 
 The count matrix can be created from a BAM-file.
 For example for a 1000 kp resolution countmatrix use:
 
 ::
 
-    scregseg make_tile --bamfile <bam> --resolution 500 --bedfile <outputbed>
+    scregseg make_tile --bamfile <bam> --resolution 1000 --bedfile <outputbed>
     scregseg bam_to_counts --bamfile <bam> --counts <countmatrix> --regions <outputbed>
 
 In order to obtain a 2D embedding of the cells,
@@ -78,7 +54,7 @@ Eventually, scbrowse expects a tsv table with the format
 
 ::
 
-   barcode      dim1    dim2    annot.annot1    annot.annot2
+   barcode      dim1    dim2    annot.annot1    annot.annot2   ...
 
 The first three columns (barcode, dim1 and dim2) are required.
 An arbitrary number of additional columns with prefix `annot.`
