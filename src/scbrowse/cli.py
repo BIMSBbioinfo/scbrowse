@@ -50,7 +50,8 @@ args = dict(embedding=os.environ['SCBROWSE_EMBEDDING'],
             port=8051,
             logs=os.environ['SCBROWSE_LOGS'])
 
-colors = px.colors.qualitative.Light24
+annotationcolors = px.colors.qualitative.Light24
+selectioncolors = px.colors.qualitative.Dark24
 
 ###############
 # data helper functions
@@ -128,8 +129,6 @@ def data_bars_diverging(data, column, color_above='#3D9970', color_below='#FF413
     bounds = [i * (1.0 / n_bins) for i in range(n_bins + 1)]
     col_max = 3.
     col_min = -3.
-    #col_max = pd.Series(data).max()
-    #col_min = pd.Series(data).min()
     ranges = [
         ((col_max - col_min) * i) + col_min
         for i in bounds
@@ -218,7 +217,8 @@ class TableManager:
         )
 
     def draw_header(self):
-        return [{'name': h, 'id': h, 'type': 'text' if h == 'Name' else 'numeric'} for h in self.header]
+        return [{'name': h, 'id': h, 'type': 'text' \
+                 if h == 'Name' else 'numeric'} for h in self.header]
 
     def add_row(self, name, n11, c1, r1, n, ncells):
         n21 = c1 - n11
@@ -242,6 +242,7 @@ class TableManager:
 
 class TrackManager:
     def __init__(self, regs_, tracknames,
+                 colors,
                  genes, controlprops):
         self.regs_ = regs_
         self.tracknames = tracknames
@@ -250,9 +251,8 @@ class TrackManager:
         self.highlight = get_highlight(regs_)
         self.controlprops = controlprops
         self.genes = genes
-        ni = len(px.colors.qualitative.Light24)
-        self.colors = {trackname: px.colors.qualitative.Light24[i%ni] for i, \
-                       trackname in enumerate(tracknames)}
+        self.colors = colors
+        assert len(tracknames) == len(colors)
         self.init_trace()
 
     def allocate(self):
@@ -492,7 +492,8 @@ chromlens = {c: regs.query(f'chrom == "{c}"').end.max() for c in chroms}
 
 celldepth = np.asarray(cmat.cmat.sum(0)).flatten()
 
-genelocus = [dict(label=g.name, value=f'{g.chrom}:{g.start}-{g.end}') for g in genes]
+genelocus = [dict(label=g.name,
+                  value=f'{g.chrom}:{g.start}-{g.end}') for g in genes]
 
 ##############
 # instantiate app
@@ -618,8 +619,9 @@ def make_server():
                     html.Label(html.B("Highlight:")),
                     dcc.RangeSlider(
                         id="highlight-selector", min=0, max=100, value=[25, 75],
+                        disabled=True,
                     ),
-                ]),
+                ], style={'display':'none'}),
                 html.Div([
                     html.Label(html.B("Plot-type:")),
                     dcc.RadioItems(
@@ -764,20 +766,23 @@ def update_locus_selector_value(coord, relayout):
 )
 @log_layer
 def update_scatter(annot, selection_store, dragmode):
-    ni = len(colors)
+    #ni = len(colors)
     co = {}
     if annot in emb.columns:
         tracknames = sorted(emb[annot].unique().tolist())
     else:
         tracknames = ['None']
 
+    colors = {trackname: annotationcolors[i%len(annotationcolors)] for i, \
+              trackname in enumerate(tracknames)}
+
     if selection_store is not None and len(selection_store) > 0:
        selection_hash = selection_store[-1]
        selection = get_selection(selection_hash)
-       tracknames += [selkey for selkey in selection]
-
-    co = {trackname: colors[i%ni] for i, \
-          trackname in enumerate(tracknames)}
+       selnames = [selkey for selkey in selection]
+       colors.update({trackname: selectioncolors[i%len(selectioncolors)] for i, \
+                 trackname in enumerate(selnames)})
+       tracknames += selnames
 
     fig = px.scatter(
         emb,
@@ -786,31 +791,28 @@ def update_scatter(annot, selection_store, dragmode):
         hover_name="barcode",
         opacity=0.3,
         color=annot if annot != "None" else None,
-        color_discrete_sequence=[colors[0]] if annot == "None" else None,
-        color_discrete_map=co,
+        color_discrete_sequence=[annotationcolors[0]] if annot == "None" else None,
+        color_discrete_map=colors,
         custom_data=["barcode"],
         template="plotly_white",
     )
 
-    print(selection_store)
     if selection_store is not None and len(selection_store) > 0:
        selection_hash = selection_store[-1]
        selection = get_selection(selection_hash)
 
-       print(selection_hash, selection)
        for selkey in selection:
            fig.add_trace(go.Scatter(x=selection[selkey]['x'],
                                     y=selection[selkey]['y'],
                                     text=selkey,
                                     name=selkey,
-                                    fillcolor=co[selkey],
+                                    fillcolor=colors[selkey],
                                     opacity=0.2,
                                     mode='lines',
                                     hoverinfo='skip',
                                     line_width=0,
                                     fill='toself'))
     fig.update_traces(marker=dict(size=3))
-    # fig.update_data
     fig.update_layout(clickmode="event+select",
                       template='plotly_white',
                       dragmode=dragmode)
@@ -862,22 +864,30 @@ def update_summary(chrom, interval, plottype,
             if normalize:
                 regs_.loc[:,trackname] /= readsincell[cell_ids].sum()*1e5
 
+    colors = {trackname: annotationcolors[i%len(annotationcolors)] for i, \
+              trackname in enumerate(tracknames)}
 
     if selectionstore is not None:
         # get cells from the cell selection store
+        selnames = []
         selcells = get_cells(selectionstore[-1])
         for selcell in selcells or []:
             cell_ids = selcells[selcell]
             regs_.loc[:,selcell] = cell_coverage(cmat, regs_.index, cell_ids)
-            tracknames.append(selcell)
+            selnames.append(selcell)
             if normalize:
                 regs_.loc[:,selcell] /= readsincell[cell_ids].sum()*1e5
+        colors.update({trackname: selectioncolors[i%len(selectioncolors)] for i, \
+                  trackname in enumerate(selnames)})
+        tracknames += selnames
+
 
     controlprops = {'plottype': plottype,
                     'dragmode': dragmode,
                     'overlay': overlay}
 
     trackmanager = TrackManager(regs_, tracknames,
+                                colors,
                                 genes, controlprops)
     fig = trackmanager.draw()
 
