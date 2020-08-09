@@ -353,16 +353,16 @@ class TrackManager:
         )
 
     def draw_annotation(self, fig):
-        if self.genes is not None:
-            ntracks = len(self.tracknames) if self.controlprops['overlay'] else 1
-            chrom, start, end = self.locus
-            plobjs = _draw_gene_annotation(fig, self.genes, chrom, start, end)
-            for plobj in plobjs:
-                fig.add_trace(
-                    plobj,
-                    row=ntracks*self.trackheight + 1,
-                    col=1,
-                )
+        ntracks = len(self.tracknames) if self.controlprops['overlay'] else 1
+        chrom, start, end = self.locus
+        plobjs = _draw_gene_annotation(fig, self.genes, chrom, start, end)
+        for plobj in plobjs or []:
+            fig.add_trace(
+                plobj,
+                row=ntracks*self.trackheight + 1,
+                col=1,
+            )
+        if plobjs is not None:
             fig.layout[f"yaxis{ntracks+1}"]["showticklabels"] = False
             fig.layout[f"yaxis{ntracks+1}"]["showgrid"] = False
             fig.layout[f"yaxis{ntracks+1}"]["zeroline"] = False
