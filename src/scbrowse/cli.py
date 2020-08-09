@@ -122,17 +122,84 @@ def get_highlight(regs_):
     return [xmin, xmax]
 
 
+def data_bars_diverging(data, column, color_above='#3D9970', color_below='#FF4136'):
+    data = [float(d) for d in data[column]]
+    n_bins = 100
+    bounds = [i * (1.0 / n_bins) for i in range(n_bins + 1)]
+    print(data)
+    col_max = 3.
+    col_min = -3.
+    #col_max = pd.Series(data).max()
+    #col_min = pd.Series(data).min()
+    ranges = [
+        ((col_max - col_min) * i) + col_min
+        for i in bounds
+    ]
+    midpoint = (col_max + col_min) / 2.
+
+    styles = []
+    for i in range(1, len(bounds)):
+        min_bound = ranges[i - 1]
+        max_bound = ranges[i]
+        min_bound_percentage = bounds[i - 1] * 100
+        max_bound_percentage = bounds[i] * 100
+
+        style = {
+            'if': {
+                'filter_query': (
+                    '{{{column}}} >= {min_bound}' +
+                    (' && {{{column}}} < {max_bound}' if (i < len(bounds) - 1) else '')
+                ).format(column=column, min_bound=min_bound, max_bound=max_bound),
+                'column_id': column
+            },
+            'paddingBottom': 2,
+            'paddingTop': 2
+        }
+        if max_bound > midpoint:
+            background = (
+                """
+                    linear-gradient(90deg,
+                    white 0%,
+                    white 50%,
+                    {color_above} 50%,
+                    {color_above} {max_bound_percentage}%,
+                    white {max_bound_percentage}%,
+                    white 100%)
+                """.format(
+                    max_bound_percentage=max_bound_percentage,
+                    color_above=color_above
+                )
+            )
+        else:
+            background = (
+                """
+                    linear-gradient(90deg,
+                    white 0%,
+                    white {min_bound_percentage}%,
+                    {color_below} {min_bound_percentage}%,
+                    {color_below} 50%,
+                    white 50%,
+                    white 100%)
+                """.format(
+                    min_bound_percentage=min_bound_percentage,
+                    color_below=color_below
+                )
+            )
+        style['background'] = background
+        styles.append(style)
+
+    return styles
+
 class TableManager:
     def __init__(self, regs_):
         self.regs_ = regs_
-        self.header = ["Name", "Highlight", "Outside", "Log-Odds", "P-value"]
+        self.header = ["Name", "Highlight", "Outside", "LogOdds", "Pvalue"]
         self.data = {h: [] for h in self.header}
         self.nrows = 0
 
     def draw(self):
         if self.nrows <=0:
             return ""
-        ni = len(px.colors.qualitative.Light24)
         return dash_table.DataTable(
           id='datatable',
           columns=self.draw_header(),
@@ -141,18 +208,18 @@ class TableManager:
              'whiteSpace': 'normal',
              'height': 'auto',
          },
-          style_cell_conditional=
-          [
-             {'if': {'column_id': 'Name'},
-              'width': '10%'},
-          ],
+          style_data_conditional=
+          ( data_bars_diverging(self.data, 'LogOdds',
+                                color_above=px.colors.diverging.Picnic[-1],
+                                color_below=px.colors.diverging.Picnic[0])
+          ),
           page_action='none',
           style_table={'height': '300px', 'overflowY': 'auto',
                        }
         )
 
     def draw_header(self):
-        return [{'name': h, 'id': h} for h in self.header]
+        return [{'name': h, 'id': h, 'type': 'text' if h == 'Name' else 'numeric'} for h in self.header]
 
     def add_row(self, name, n11, c1, r1, n, ncells):
         n21 = c1 - n11
