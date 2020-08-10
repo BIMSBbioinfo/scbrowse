@@ -5,3 +5,4 @@ accesslog = '/mnt/storage/wolfgang/wolfgang/src/scbrowse-logs/access_gunicorn.lo
 errorlog = '/mnt/storage/wolfgang/wolfgang/src/scbrowse-logs/error_gunicorn.log'
 graceful_timeout = 60
 timeout=60
+daemon = True
