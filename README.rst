@@ -7,6 +7,10 @@ It allows to simultaneously explore the accessibility patterns
 of selected cells in the embedding space and for selected genomic regions.
 The tools freely available under a GNU Lesser General Public License v3 or later (LGPLv3+).
 
+.. image:: example.png
+  :width: 600px
+  :align: center
+
 Installation
 ============
 
@@ -26,7 +30,7 @@ a new conda environment.
     git clone https://github.com/BIMSBbioinfo/scbrowse
     pip install -e scbrowse[gunicorn]
 
-::
+
 
 Data preparation
 ================
@@ -35,7 +39,7 @@ SCbrowse needs two required ingredients:
 
 1. A genome-wide count matrix
 2. 2D embedding of the cells
-3. Gene annotation in bed format 
+3. Gene annotation in bed format
 
 The count matrix can be created from a BAM-file.
 For example for a 1000 kp resolution countmatrix use:
@@ -95,5 +99,13 @@ Subsequently, it launches the application using gunicorn.
 
 Afterwards you can browse the data locally in a web-browser by opening
 https://localhost:8000
+
+Navigation
+==========
+
+
+.. image:: navi.svg
+
+.. image:: example_annotated.svg
 
 
