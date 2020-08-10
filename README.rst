@@ -7,15 +7,19 @@ It allows to simultaneously explore the accessibility patterns
 of selected cells in the embedding space and for selected genomic regions.
 The tools freely available under a GNU Lesser General Public License v3 or later (LGPLv3+).
 
-.. image:: example.png
-  :width: 600px
-  :align: center
+Navigation
+==========
+
+.. image:: navi.svg
+
+.. image:: example_annotated.svg
+
 
 Installation
 ============
 
-The following lines show how to install the requirements and scbrowse into
-a new conda environment.
+The following lines show how to install scbrowse and its requirements
+using conda
 
 ::
 
@@ -35,13 +39,13 @@ a new conda environment.
 Data preparation
 ================
 
-SCbrowse needs two required ingredients:
+SCbrowse needs three required ingredients:
 
 1. A genome-wide count matrix
 2. 2D embedding of the cells
 3. Gene annotation in bed format
 
-The count matrix can be created from a BAM-file.
+The count matrix can be created from a BAM-file using scregseg.
 For example for a 1000 kp resolution countmatrix use:
 
 ::
@@ -49,26 +53,27 @@ For example for a 1000 kp resolution countmatrix use:
     scregseg make_tile --bamfile <bam> --resolution 1000 --bedfile <outputbed>
     scregseg bam_to_counts --bamfile <bam> --counts <countmatrix> --regions <outputbed>
 
-In order to obtain a 2D embedding of the cells,
-a number of tools have been proposed already.
-For instance, one might want to follow cisTopic, snapATAC, Seurat, etc.
-The tutorials of the respective tools illustrate how UMAP embeddings
-of the cells can be obtains.
-Eventually, scbrowse expects a tsv table with the format
+A number of tools facilitate dimensionality reduction for
+single-cell ATAC-seq data, including cisTopic or snapATAC.
+Subsequently, UMAP, t-SNE (or any other 2D embedding algorithm)
+can be used to create the embedding.
+Eventually, scbrowse expects a tsv table with the embedding results
+with the format
 
 ::
 
    barcode      dim1    dim2    annot.annot1    annot.annot2   ...
 
 The first three columns (barcode, dim1 and dim2) are required.
+They contain the barcode IDs and the embedding coordinates.
 An arbitrary number of additional columns with prefix `annot.`
-can be added with categorical labels. They can be selected for
-coloring the cells.
+can be added to supply pre-defined (categorical) cell annotation.
 
 Using scbrowse (development mode)
 =================================
 
-To launch scbrowse in development mode, use first set the environment variables
+To launch scbrowse in development mode, 
+first, define the following environment variables
 to point to the input files
 
 ::
@@ -87,25 +92,16 @@ https://localhost:8051
 Deploy scbrowse in production mode
 ==================================
 
-The simplest way to deploy scbrowse using gunicorn is
-to adjust the :code:`startup.sh`.
-It requires to specify the input file locations using a set of
-environment variables.
-Subsequently, it launches the application using gunicorn.
+The simplest way to deploy scbrowse is via gunicorn.
+The repository contains a  :code:`startup.sh` script
+that launches the web server.
+It needs to be adjusted to point to the input file locations.
+Then run
 
 ::
 
     sh startup.sh
 
-Afterwards you can browse the data locally in a web-browser by opening
+and open the scbrowse in a web browser at
 https://localhost:8000
-
-Navigation
-==========
-
-
-.. image:: navi.svg
-
-.. image:: example_annotated.svg
-
 
