@@ -185,14 +185,14 @@
      inkscape:pageshadow="2"
      inkscape:zoom="0.98994949"
      inkscape:cx="598.57758"
-     inkscape:cy="553.92255"
+     inkscape:cy="392.29814"
      inkscape:document-units="mm"
      inkscape:current-layer="layer1"
      showgrid="false"
      inkscape:window-width="1920"
-     inkscape:window-height="1005"
-     inkscape:window-x="0"
-     inkscape:window-y="25"
+     inkscape:window-height="1054"
+     inkscape:window-x="1920"
+     inkscape:window-y="0"
      inkscape:window-maximized="1"
      fit-margin-top="0"
      fit-margin-left="0"
@@ -2169,17 +2169,17 @@ QN4JAAAAAPuAvBMAAAAA9gF5JwAAAADsA/JOAAAAANiH/wfHnPKbmz7gDQAAAABJRU5ErkJggg==
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:3.63802075px;line-height:125%;font-family:sans-serif;text-align:start;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       x="108.77869"
-       y="131.29289"
+       x="105.03691"
+       y="147.59633"
        id="text4862"><tspan
          sodipodi:role="line"
-         id="tspan4860"
-         x="108.77869"
-         y="131.29289"
-         style="stroke-width:0.26458332px">Select/load predefined cell annotaiton</tspan></text>
+         x="105.03691"
+         y="147.59633"
+         style="stroke-width:0.26458332px"
+         id="tspan10888">Select pre-defined cell annotaiton</tspan></text>
     <path
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Lend)"
-       d="M 136.30746,134.50013 106.106,166.03793"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.28;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Lend)"
+       d="m 114.99312,156.88694 -9.13578,9.41121"
        id="path4864"
        inkscape:connector-curvature="0" />
     <text
@@ -2199,7 +2199,7 @@ QN4JAAAAAPuAvBMAAAAA9gF5JwAAAADsA/JOAAAAANiH/wfHnPKbmz7gDQAAAABJRU5ErkJggg==
          style="stroke-width:0.26458332px"
          id="tspan5152">and track layout</tspan></text>
     <path
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.36417821px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#marker5164)"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.264;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#marker5164)"
        d="m 309.64454,138.81581 -17.76319,9.27045"
        id="path5154"
        inkscape:connector-curvature="0" />
@@ -2223,7 +2223,7 @@ QN4JAAAAAPuAvBMAAAAA9gF5JwAAAADsA/JOAAAAANiH/wfHnPKbmz7gDQAAAABJRU5ErkJggg==
          x="21.381563"
          y="235.00136"
          style="stroke-width:0.26458332px"
-         id="tspan5208">Allows to dynamically select cells</tspan></text>
+         id="tspan5208">Interactive cell selection</tspan></text>
     <path
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#marker5226)"
        d="M 73.499119,228.04446 C 119.20221,205.86109 119.20221,205.86109 119.20221,205.86109"
@@ -2280,12 +2280,12 @@ QN4JAAAAAPuAvBMAAAAA9gF5JwAAAADsA/JOAAAAANiH/wfHnPKbmz7gDQAAAABJRU5ErkJggg==
          id="tspan5370"
          x="220.76462"
          y="332.27954"
-         style="stroke-width:0.26458332px">Testing for a elevated accessibility</tspan><tspan
+         style="stroke-width:0.26458332px">On-the-fly testing for elevated accessibility</tspan><tspan
          sodipodi:role="line"
          x="220.76462"
          y="336.82706"
          style="stroke-width:0.26458332px"
-         id="tspan5374">in a highlighted region</tspan></text>
+         id="tspan5374">in a highlighted genomic region</tspan></text>
     <path
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#marker5388)"
        d="m 215.6865,333.88318 -25.65787,9.62171"
