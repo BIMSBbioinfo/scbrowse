@@ -1,3 +1,4 @@
+rm -rf cache-directory
 export SCBROWSE_LOGDIR=/mnt/storage/wolfgang/wolfgang/src/scbrowse-logs
 mkdir -p $SCBROWSE_LOGDIR
 

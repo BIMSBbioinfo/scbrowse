@@ -654,7 +654,7 @@ def make_server():
                             {"label": "No", "value": "No"},
                             {"label": "Yes", "value": "Yes"},
                         ],
-                        value="Yes",
+                        value="No",
                         style=dict(width="49%", display="inline-block"),
                     ),
                 ]),
@@ -841,7 +841,7 @@ def update_summary(chrom, interval, plottype,
                    highlight, normalize, overlay,
                    annotation, selectionstore, dragmode):
     normalize = True if normalize == "Yes" else False
-    overlay = True if overlay == "Yes" else False
+    overlay = True if overlay == "No" else False
 
     if chrom is None:
         raise PreventUpdate
