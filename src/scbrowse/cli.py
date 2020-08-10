@@ -514,22 +514,24 @@ cache = Cache(app.server, config={
 
     # should be equal to maximum number of users on the app at a single time
     # higher numbers will store more data in the filesystem / redis cache
-    'CACHE_THRESHOLD': 200
+    'CACHE_THRESHOLD': 400
 })
 
-def get_cells(datahash, cells=None):
-    @cache.memoize()
-    def _get_cells(datahash):
-        return cells
+def get_cells(datahash, data=None):
+    datahash = 'cells' + datahash
+    if data is not None:
+        cache.set(datahash, data)
+        logging.debug(f'get_cells({datahash}, <<<data>>>>)')
+    logging.debug(f'get_cells({datahash})')
+    return cache.get(datahash)
 
-    return _get_cells(datahash)
-
-def get_selection(datahash, selection=None):
-    @cache.memoize()
-    def _get_selection(datahash):
-        return selection
-
-    return _get_selection(datahash)
+def get_selection(datahash, data=None):
+    datahash = 'selection' + datahash
+    if data is not None:
+        cache.set(datahash, data)
+        logging.debug(f'get_selection({datahash}, <<<data>>>>)')
+    logging.debug(f'get_selection({datahash})')
+    return cache.get(datahash)
 
 def get_region_selection(chrom, interval, highlight):
     @cache.memoize()
