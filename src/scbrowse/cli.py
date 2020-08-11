@@ -514,7 +514,7 @@ cache = Cache(app.server, config={
 
     # should be equal to maximum number of users on the app at a single time
     # higher numbers will store more data in the filesystem / redis cache
-    'CACHE_THRESHOLD': 400
+    'CACHE_THRESHOLD': 800
 })
 
 def get_cells(datahash, data=None):
