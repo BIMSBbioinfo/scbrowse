@@ -12,5 +12,5 @@ export SCBROWSE_LOGS=$SCBROWSE_LOGDIR/scbrowse.log
 # scbrowse
 
 # production with:
-gunicorn -c config.py cli:server
+gunicorn -c gunicorn.config.py cli:server
 
