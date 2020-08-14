@@ -57,8 +57,7 @@ A number of tools facilitate dimensionality reduction for
 single-cell ATAC-seq data, including cisTopic or snapATAC.
 Subsequently, UMAP, t-SNE (or any other 2D embedding algorithm)
 can be used to create the embedding.
-Eventually, scbrowse expects a tsv table with the embedding results
-with the format
+Eventually, scbrowse expects the embedding results in a tsv formatted table
 
 ::
 
@@ -66,7 +65,7 @@ with the format
 
 The first three columns (barcode, dim1 and dim2) are required.
 They contain the barcode IDs and the embedding coordinates.
-An arbitrary number of additional columns with prefix `annot.`
+An arbitrary number of additional columns with prefix :code:`annot.`
 can be added to supply pre-defined (categorical) cell annotation.
 
 Using scbrowse (development mode)
