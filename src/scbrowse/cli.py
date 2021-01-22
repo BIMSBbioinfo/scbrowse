@@ -455,7 +455,7 @@ logging.basicConfig(filename = args['logs'],
                     format='%(asctime)s;%(levelname)s;%(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
 
-logging.debug('scbrowser - startup')
+logging.debug('scbrowse - startup')
 logging.debug(args)
 
 ##############
@@ -517,16 +517,16 @@ cache = Cache(app.server, config={
     'CACHE_THRESHOLD': 800
 })
 
-def get_cells(datahash, data=None):
-    datahash = 'cells' + datahash
+def get_cells(session_id, datahash, data=None):
+    datahash = session_id + '_cells_' + datahash
     if data is not None:
         cache.set(datahash, data)
         logging.debug(f'get_cells({datahash}, <<<data>>>>)')
     logging.debug(f'get_cells({datahash})')
     return cache.get(datahash)
 
-def get_selection(datahash, data=None):
-    datahash = 'selection' + datahash
+def get_selection(session_id, datahash, data=None):
+    datahash = session_id + '_selection_' + datahash
     if data is not None:
         cache.set(datahash, data)
         logging.debug(f'get_selection({datahash}, <<<data>>>>)')
@@ -564,6 +564,8 @@ def get_region_selection(chrom, interval, highlight):
 ##############
 
 def make_server():
+    session_id = str(uuid.uuid4())
+    logging.debug(f'new session_id = {session_id}')
     return html.Div(
     [
         html.Div(
@@ -679,6 +681,9 @@ def make_server():
         html.Div([
                 html.Div(id="stats-field"),
                 dcc.Store(
+                    id="session-id", data=session_id,
+                ),
+                dcc.Store(
                     id="dragmode-track", data="select",
                 ),
                 dcc.Store(
@@ -764,11 +769,11 @@ def update_locus_selector_value(coord, relayout):
     ],
     [
      State(component_id="dragmode-scatter", component_property="data"),
+     State(component_id="session-id", component_property="data"),
     ]
 )
 @log_layer
-def update_scatter(annot, selection_store, dragmode):
-    #ni = len(colors)
+def update_scatter(annot, selection_store, dragmode, session_id):
     co = {}
     if annot in emb.columns:
         tracknames = sorted(emb[annot].unique().tolist())
@@ -780,7 +785,7 @@ def update_scatter(annot, selection_store, dragmode):
 
     if selection_store is not None and len(selection_store) > 0:
        selection_hash = selection_store[-1]
-       selection = get_selection(selection_hash)
+       selection = get_selection(session_id, selection_hash)
        selnames = [selkey for selkey in selection]
        colors.update({trackname: selectioncolors[i%len(selectioncolors)] for i, \
                  trackname in enumerate(selnames)})
@@ -801,7 +806,7 @@ def update_scatter(annot, selection_store, dragmode):
 
     if selection_store is not None and len(selection_store) > 0:
        selection_hash = selection_store[-1]
-       selection = get_selection(selection_hash)
+       selection = get_selection(session_id, selection_hash)
 
        for selkey in selection:
            fig.add_trace(go.Scatter(x=selection[selkey]['x'],
@@ -836,12 +841,13 @@ def update_scatter(annot, selection_store, dragmode):
     ],
     [
         State(component_id="dragmode-track", component_property="data"),
+        State(component_id="session-id", component_property="data"),
     ],
 )
 @log_layer
 def update_summary(chrom, interval, plottype,
                    highlight, normalize, overlay,
-                   annotation, selectionstore, dragmode):
+                   annotation, selectionstore, dragmode, session_id):
     normalize = True if normalize == "Yes" else False
     overlay = True if overlay == "No" else False
 
@@ -872,7 +878,7 @@ def update_summary(chrom, interval, plottype,
     if selectionstore is not None:
         # get cells from the cell selection store
         selnames = []
-        selcells = get_cells(selectionstore[-1])
+        selcells = get_cells(session_id, selectionstore[-1])
         for selcell in selcells or []:
             cell_ids = selcells[selcell]
             regs_.loc[:,selcell] = cell_coverage(cmat, regs_.index, cell_ids)
@@ -905,10 +911,11 @@ def update_summary(chrom, interval, plottype,
     ],
     [
         State("selection-store", "data"),
+        State(component_id="session-id", component_property="data"),
     ],
 )
 @log_layer
-def selection_store(selected, clicked, undolast, prev_hash):
+def selection_store(selected, clicked, undolast, prev_hash, session_id):
 
     ctx = dash.callback_context
 
@@ -917,8 +924,8 @@ def selection_store(selected, clicked, undolast, prev_hash):
 
     if ctx.triggered[0]['prop_id'] == 'clear-selection.n_clicks':
         new_hash = [""]
-        get_cells(new_hash[-1])
-        get_selection(new_hash[-1], dict())
+        get_cells(session_id, new_hash[-1])
+        get_selection(session_id, new_hash[-1], dict())
         return new_hash
 
     if ctx.triggered[0]['prop_id'] == 'undo-last-selection.n_clicks':
@@ -927,16 +934,16 @@ def selection_store(selected, clicked, undolast, prev_hash):
         else:
             # don't pop if already empty
             new_hash = [""]
-            get_cells(new_hash[-1])
-            get_selection(new_hash[-1], dict())
+            get_cells(session_id, new_hash[-1])
+            get_selection(session_id, new_hash[-1], dict())
         return new_hash
 
     if selected is None:
         raise PreventUpdate
 
     if prev_hash is not None:
-        prev_cells = copy(get_cells(prev_hash[-1])) or {}
-        prev_selection = copy(get_selection(prev_hash[-1])) or {}
+        prev_cells = copy(get_cells(session_id, prev_hash[-1])) or {}
+        prev_selection = copy(get_selection(session_id, prev_hash[-1])) or {}
     else:
         prev_hash = []
         prev_cells = dict()
@@ -972,8 +979,8 @@ def selection_store(selected, clicked, undolast, prev_hash):
 
     new_hash = prev_hash + [data_md5]
 
-    get_cells(new_hash[-1], new_cells)
-    get_selection(new_hash[-1], new_selection)
+    get_cells(session_id, new_hash[-1], new_cells)
+    get_selection(session_id, new_hash[-1], new_selection)
 
     return new_hash
 
@@ -987,10 +994,14 @@ def selection_store(selected, clicked, undolast, prev_hash):
         Input(component_id="annotation-selector", component_property="value"),
         Input(component_id="selection-store", component_property="data"),
     ],
+    [
+     State(component_id="session-id", component_property="data"),
+    ],
 )
 @log_layer
 def update_statistics(chrom, interval,
-                      highlight, annotation, selectionstore):
+                      highlight, annotation,
+                      selectionstore, session_id):
     if chrom is None:
         raise PreventUpdate
     if interval is None:
@@ -1020,7 +1031,7 @@ def update_statistics(chrom, interval,
 
     if selectionstore is not None:
         # get cells from the cell selection store
-        selcells = get_cells(selectionstore[-1])
+        selcells = get_cells(session_id, selectionstore[-1])
         for selcell in selcells or []:
             cell_ids = selcells[selcell]
 
