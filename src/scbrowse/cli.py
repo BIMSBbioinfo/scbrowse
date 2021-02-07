@@ -40,16 +40,17 @@ from dash.dependencies import Input, Output, State
 from pybedtools import BedTool, Interval
 
 import pandas as pd
-from scregseg.countmatrix import CountMatrix
+#from scregseg.countmatrix import CountMatrix
+from anndata import read_h5ad
 import uuid
 
-args = dict(embedding=os.environ['SCBROWSE_EMBEDDING'],
+args = dict(
             matrix=os.environ['SCBROWSE_MATRIX'],
-            regions=os.environ['SCBROWSE_REGIONS'],
             genes=os.environ['SCBROWSE_GENES'],
             port=8051,
             logs=os.environ['SCBROWSE_LOGS'])
 
+print(args)
 annotationcolors = px.colors.qualitative.Light24
 selectioncolors = px.colors.qualitative.Dark24
 
@@ -65,7 +66,7 @@ def log_layer(fn):
             return {k: props[k] for k in props \
                     if k not in ['points',
                              'scatter-plot.selectedData',
-                             'summary-plot.selectedData']}
+                             'genome-track.selectedData']}
 
         logging.debug(f'wrap:callb:'
                       f'outputs:{_extr(ctx.outputs_list)}:'
@@ -83,15 +84,17 @@ def log_layer(fn):
     return _log_wrapper
 
 
-def cell_coverage(cmat, regions, cells):
-    m = cmat.cmat
+def cell_coverage(adata, regions, cells, normalize):
+
+    adata = adata
     if regions is not None:
-        m = m[regions, :]
+        adata = adata[regions, :]
     if cells is not None:
-        #m = m[:, cmat.cannot[cmat.cannot.cell.isin(cells)].index]
-        m = m[:, cells]
-        return np.asarray(m.sum(1)).flatten()
-    return np.asarray(m.sum(1)).flatten()
+        adata = adata[:, cells]
+    track = np.asarray(adata.X.sum(1)).flatten()
+    if normalize:
+        track *=1e5/adata.var.nFrags.sum()
+    return track
 
 
 def _highlight(row, rmin, rmax, highlight):
@@ -466,31 +469,34 @@ genes = BedTool(args['genes'])
 
 logging.debug(f'Number of genes: {len(genes)}')
 
-emb = pd.read_csv(args['embedding'], sep="\t")
-if "barcode" not in emb.columns:
-    emb["barcode"] = emb.index
+adata = read_h5ad(args['matrix'])
+adata.X.data[adata.X.data>0]=1
 
-logging.debug(f'Embedding dims: {emb.shape}')
+use_emb = adata.uns['embeddings'][0]
+#adata.var.loc[:,'dim1'] = adata.varm[use_emb][:,0]
+#adata.var.loc[:,'dim2'] = adata.varm[use_emb][:,1]
+adata.var.loc[:, "nFrags"] = np.asarray(adata.X.sum(0)).flatten()
+adata.obs.loc[:, "nFrags"] = np.asarray(adata.X.sum(1)).flatten()
 
-cmat = CountMatrix.from_mtx(args['matrix'], args['regions'])
+adata.uns['nFrags'] = adata.var.nFrags.sum()
+#readsincell = np.asarray(adata.X.sum(0)).flatten()
+#readsinregion = np.asarray(adata.X.sum(1)).flatten()
 
-readsincell = np.asarray(cmat.cmat.sum(0)).flatten()
-readsinregion = np.asarray(cmat.cmat.sum(1)).flatten()
+#totcellcount = np.asarray(adata.X.sum(0)).flatten()
+#totcellcount = totcellcount.astype("float") / totcellcount.sum()
 
-totcellcount = np.asarray(cmat.cmat.sum(0)).flatten()
-totcellcount = totcellcount.astype("float") / totcellcount.sum()
+logging.debug(f'CountMatrix: {adata}')
+print(repr(adata))
 
-logging.debug(f'CountMatrix: {cmat}')
+regs = adata.obs.copy()
+regs["total_coverage"] = cell_coverage(adata, None, None, False)
 
-regs = cmat.regions.copy()
-regs["total_coverage"] = cell_coverage(cmat, None, None)
-
-chroms = cmat.regions.chrom.unique().tolist()
+chroms = adata.obs.chrom.unique().tolist()
 
 options = [dict(label=c, value=c) for c in chroms]
 chromlens = {c: regs.query(f'chrom == "{c}"').end.max() for c in chroms}
 
-celldepth = np.asarray(cmat.cmat.sum(0)).flatten()
+celldepth = np.asarray(adata.X.sum(0)).flatten()
 
 genelocus = [dict(label=g.name,
                   value=f'{g.chrom}:{g.start}-{g.end}') for g in genes]
@@ -574,9 +580,8 @@ def make_server():
                 dcc.Dropdown(
                     id="annotation-selector",
                     options=[
-                        {"label": name[6:], "value": name}
-                        for name in emb.columns
-                        if "annot." in name
+                        {"label": name, "value": name}
+                        for name in adata.var.columns if name != 'nFrags'
                     ]
                     + [{"label": "None", "value": "None"}],
                     value="None",
@@ -673,7 +678,7 @@ def make_server():
         ),
         html.Div(
             [
-                dcc.Graph(id="summary-plot", style={'height': '500px'}),
+                dcc.Graph(id="genome-track", style={'height': '500px'}),
             ],
             style=dict(width="49%", display="inline-block"),
         ),
@@ -733,7 +738,7 @@ def update_locus_selector_maxrange(locus):
 @app.callback(
     Output(component_id="locus-selector", component_property="value"),
     [Input(component_id="gene-selector", component_property="value"),
-     Input(component_id="summary-plot", component_property="relayoutData"),],
+     Input(component_id="genome-track", component_property="relayoutData"),],
 )
 @log_layer
 def update_locus_selector_value(coord, relayout):
@@ -742,7 +747,7 @@ def update_locus_selector_value(coord, relayout):
     if ctx.triggered is None:
         raise PreventUpdate
 
-    elif 'summary-plot.relayoutData' == ctx.triggered[0]['prop_id'] and \
+    elif 'genome-track.relayoutData' == ctx.triggered[0]['prop_id'] and \
        ctx.triggered[0]['value'] is not None and \
        'xaxis.range[0]' in ctx.triggered[0]['value']:
         interval = [
@@ -775,8 +780,8 @@ def update_locus_selector_value(coord, relayout):
 @log_layer
 def update_scatter(annot, selection_store, dragmode, session_id):
     co = {}
-    if annot in emb.columns:
-        tracknames = sorted(emb[annot].unique().tolist())
+    if annot in adata.var.columns:
+        tracknames = sorted(adata.var[annot].unique().tolist())
     else:
         tracknames = ['None']
 
@@ -791,16 +796,20 @@ def update_scatter(annot, selection_store, dragmode, session_id):
                  trackname in enumerate(selnames)})
        tracknames += selnames
 
+    df = adata.var.copy()
+    df.loc[:, 'dim1'] = adata.varm[use_emb][:,0]
+    df.loc[:, 'dim2'] = adata.varm[use_emb][:,1]
+
     fig = px.scatter(
-        emb,
+        df,
         x="dim1",
         y="dim2",
-        hover_name="barcode",
+        hover_name=df.index,
         opacity=0.3,
         color=annot if annot != "None" else None,
         color_discrete_sequence=[annotationcolors[0]] if annot == "None" else None,
         color_discrete_map=colors,
-        custom_data=["barcode"],
+        custom_data=[df.index],
         template="plotly_white",
     )
 
@@ -828,7 +837,7 @@ def update_scatter(annot, selection_store, dragmode, session_id):
 
 
 @app.callback(
-    Output(component_id="summary-plot", component_property="figure"),
+    Output(component_id="genome-track", component_property="figure"),
     [
         Input(component_id="chrom-selector", component_property="value"),
         Input(component_id="locus-selector", component_property="value"),
@@ -860,17 +869,17 @@ def update_summary(chrom, interval, plottype,
 
     tracknames = ['total_coverage']
     if normalize:
-        regs_.loc[:,'total_coverage'] /= readsincell.sum()*1e5
+        regs_.loc[:,'total_coverage'] /= adata.uns['nFrags']*1e5
 
     if annotation != 'None':
-        df = pd.merge(cmat.cannot, emb, how='left', left_on='cell', right_on='barcode')
+
+        df = adata.var
+
         tracknames = sorted(df[annotation].unique().tolist())
 
         for trackname in tracknames:
             cell_ids =  df[df[annotation] == trackname].index
-            regs_.loc[:,trackname] = cell_coverage(cmat, regs_.index, cell_ids)
-            if normalize:
-                regs_.loc[:,trackname] /= readsincell[cell_ids].sum()*1e5
+            regs_.loc[:,trackname] = cell_coverage(adata, regs_.index, cell_ids, normalize)
 
     colors = {trackname: annotationcolors[i%len(annotationcolors)] for i, \
               trackname in enumerate(tracknames)}
@@ -879,12 +888,10 @@ def update_summary(chrom, interval, plottype,
         # get cells from the cell selection store
         selnames = []
         selcells = get_cells(session_id, selectionstore[-1])
-        for selcell in selcells or []:
-            cell_ids = selcells[selcell]
-            regs_.loc[:,selcell] = cell_coverage(cmat, regs_.index, cell_ids)
-            selnames.append(selcell)
-            if normalize:
-                regs_.loc[:,selcell] /= readsincell[cell_ids].sum()*1e5
+        for k in selcells or []:
+            cell_ids = selcells[k]
+            regs_.loc[:,k] = cell_coverage(adata, regs_.index, cell_ids, normalize)
+            selnames.append(k)
         colors.update({trackname: selectioncolors[i%len(selectioncolors)] for i, \
                   trackname in enumerate(selnames)})
         tracknames += selnames
@@ -953,7 +960,7 @@ def selection_store(selected, clicked, undolast, prev_hash, session_id):
     # got some new selected points
     sel = [point["customdata"][0] for point in selected["points"]]
     cell_ids = {selname:
-                cmat.cannot[cmat.cannot.cell.isin(sel)].index.tolist()}
+                adata.var[adata.var.index.isin(sel)].index.tolist()}
 
     selectionpoints = dict()
     if 'range' in selected:
@@ -1017,31 +1024,32 @@ def update_statistics(chrom, interval,
     tablemanager = TableManager(regs_)
 
     if annotation != 'None':
-        df = pd.merge(cmat.cannot, emb, how='left', left_on='cell', right_on='barcode')
+        df = adata.var
         tracknames = sorted(df[annotation].unique().tolist())
 
         for trackname in tracknames:
-            cell_ids =  df[df[annotation] == trackname].index
-            n11 = cmat.cmat[region_ids, :][:, cell_ids].sum()
-            # all selected cell reads
-            c1 = readsincell[cell_ids].sum()
-            r1 = readsinregion[region_ids].sum()
-            n = readsincell.sum()
-            tablemanager.add_row(trackname, n11, c1, r1, n, len(cell_ids))
+            sadata = adata[adata.obs.index.isin(region_ids), adata.var[annotation]==trackname]
+            n11 = sadata.X.sum()
+
+            c1 = sadata.var['nFrags'].sum()
+            r1 = sadata.obs['nFrags'].sum()
+
+            n = sadata.uns['nFrags']
+            tablemanager.add_row(trackname, n11, c1, r1, n, sadata.shape[1])
 
     if selectionstore is not None:
         # get cells from the cell selection store
         selcells = get_cells(session_id, selectionstore[-1])
-        for selcell in selcells or []:
-            cell_ids = selcells[selcell]
+        for k in selcells or []:
 
-            # selected cells and highlighted region
-            n11 = cmat.cmat[region_ids, :][:, cell_ids].sum()
-            # all selected cell reads
-            c1 = readsincell[cell_ids].sum()
-            r1 = readsinregion[region_ids].sum()
-            n = readsincell.sum()
-            tablemanager.add_row(selcell, n11, c1, r1, n, len(cell_ids))
+            sadata = adata[adata.obs.index.isin(region_ids), adata.var.index.isin(selcells[k])]
+            n11 = sadata.X.sum()
+
+            c1 = sadata.var['nFrags'].sum()
+            r1 = sadata.obs['nFrags'].sum()
+
+            n = sadata.uns['nFrags']
+            tablemanager.add_row(k, n11, c1, r1, n, sadata.shape[1])
 
     tab = tablemanager.draw()
     return tab
@@ -1051,7 +1059,7 @@ def update_statistics(chrom, interval,
     Output(component_id="highlight-selector", component_property="value"),
     [
         Input(component_id="locus-selector", component_property="value"),
-        Input(component_id="summary-plot", component_property="selectedData"),
+        Input(component_id="genome-track", component_property="selectedData"),
     ],
 )
 @log_layer
@@ -1093,7 +1101,7 @@ def update_highlight_selector(interval, selected):
 
 @app.callback(
     Output(component_id="dragmode-track", component_property="data"),
-    [Input(component_id="summary-plot", component_property="relayoutData"),
+    [Input(component_id="genome-track", component_property="relayoutData"),
      ],
 )
 @log_layer
