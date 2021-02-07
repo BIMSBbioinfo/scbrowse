@@ -60,6 +60,9 @@ selectioncolors = px.colors.qualitative.Dark24
 def log_layer(fn):
     @wraps(fn)
     def _log_wrapper(*args, **kwargs):
+        #logging.debug(f'memory usage: dash-size={app.__sizeof__()} '
+        #              f'cache-size={cache.__sizeof__()} '
+        #              f'server-size={server.__sizeof__()} ')
         ctx = dash.callback_context
         def _extr(props):
             return {k: props[k] for k in props \
@@ -503,7 +506,7 @@ server = Flask("scbrowse")
 
 app = dash.Dash("scbrowse", server=server)
 
-app.title = "scbrowser"
+app.title = "Zebrafish single-cell ATAC-seq"
 app.config["suppress_callback_exceptions"] = True
 cache = Cache(app.server, config={
     'CACHE_TYPE': 'redis',
@@ -514,7 +517,7 @@ cache = Cache(app.server, config={
 
     # should be equal to maximum number of users on the app at a single time
     # higher numbers will store more data in the filesystem / redis cache
-    'CACHE_THRESHOLD': 800
+    'CACHE_THRESHOLD': 50
 })
 
 def get_cells(session_id, datahash, data=None):
