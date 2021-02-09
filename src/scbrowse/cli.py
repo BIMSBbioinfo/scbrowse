@@ -14,7 +14,10 @@ Why does this file exist, and why not put this in __main__?
 
   Also see (1) from http://click.pocoo.org/5/setuptools/#setuptools-integration
 """
+import io
+import base64
 import os
+import time
 import argparse
 from functools import wraps
 from copy import copy
@@ -25,8 +28,10 @@ import dash_table
 from dash.exceptions import PreventUpdate
 import dash_core_components as dcc  # pylint: disable=import-error
 import dash_html_components as html  # pylint: disable=import-error
+import matplotlib.pyplot as plt
 import plotly.graph_objs as go  # pylint: disable=import-error
 import plotly.express as px
+import plotly.tools as tls
 from plotly.subplots import make_subplots
 from scipy.stats import fisher_exact
 from flask_caching import Cache
@@ -40,9 +45,15 @@ from dash.dependencies import Input, Output, State
 from pybedtools import BedTool, Interval
 
 import pandas as pd
-#from scregseg.countmatrix import CountMatrix
 from anndata import read_h5ad
+import scanpy as sc
 import uuid
+import coolbox
+from coolbox.api import *
+from coolbox.utilities import split_genome_range
+
+from matplotlib import rcParams
+rcParams.update({'figure.autolayout': True})
 
 args = dict(
             matrix=os.environ['SCBROWSE_MATRIX'],
@@ -51,8 +62,8 @@ args = dict(
             logs=os.environ['SCBROWSE_LOGS'])
 
 print(args)
-annotationcolors = px.colors.qualitative.Light24
-selectioncolors = px.colors.qualitative.Dark24
+annotationcolors = sc.pl.palettes.vega_20_scanpy#px.colors.qualitative.Light24
+selectioncolors = sc.pl.palettes.zeileis_28#px.colors.qualitative.Dark24
 
 ###############
 # data helper functions
@@ -65,8 +76,8 @@ def log_layer(fn):
         def _extr(props):
             return {k: props[k] for k in props \
                     if k not in ['points',
-                             'scatter-plot.selectedData',
-                             'genome-track.selectedData']}
+                             'scatter-plot.selectedData']}
+                             #'genome-track.selectedData']}
 
         logging.debug(f'wrap:callb:'
                       f'outputs:{_extr(ctx.outputs_list)}:'
@@ -84,371 +95,104 @@ def log_layer(fn):
     return _log_wrapper
 
 
-def cell_coverage(adata, regions, cells, normalize):
+class AggregateTrack(HistBase):
+    def __init__(self, adata, **kwargs):
+        properties = HistBase.DEFAULT_PROPERTIES.copy()
+        properties.update({
+            'type': properties['style'],
+            "file": 'dummy',
+            'title': 'total',
+            'color': 'black',
+            #'min_value': 0.0,
+            **kwargs,
+        })
 
-    adata = adata
-    if regions is not None:
-        adata = adata[regions, :]
-    if cells is not None:
-        adata = adata[:, cells]
-    track = np.asarray(adata.X.sum(1)).flatten()
-    if normalize:
-        track *=1e5/adata.var.nFrags.sum()
-    return track
+        super().__init__(**properties)
+        self.adata = adata
 
+    def fetch_data(self, gr, **kwargs):
+        chrom, start, end = split_genome_range(gr)
+        obs = self.adata.obs
+        obs = obs.loc[(obs.chrom==chrom) & (obs.start>=start) & (obs.end<=end),:]
+        data = obs.total.values
+        return data
 
-def _highlight(row, rmin, rmax, highlight):
-    if (
-        row.start >= rmin + (rmax - rmin) / 100 * highlight[0]
-        and row.end <= rmin + (rmax - rmin) / 100 * highlight[1]
-    ):
-        return "inside"
-    return "outside"
+class SingleCellTrack(HistBase):
 
-##############
-# drawing helper functions
-##############
+    @classmethod
+    def pseudobulk(cls, frame, adata, groupby,
+                   palettes=sc.pl.palettes.vega_20_scanpy,
+                   **kwargs):
+        if groupby in adata.var.columns:
+            names = sorted(adata.var[groupby].unique().tolist())
 
-def get_locus(regs_):
-    if regs_.shape[0] == 0:
-        return None
-    xmin = regs_.start.min()
-    xmax = regs_.end.max()
-    chrom = regs_.chrom.unique()[0]
-    return [chrom, xmin, xmax]
+        colorname = groupby + '_colors'
+        if colorname not in adata.uns:
+            adata.uns[colorname] = palettes[:len(names)]
 
-def get_highlight(regs_):
-    sregs_ = regs_[regs_.highlight == "inside"]
-    if sregs_.shape[0] == 0:
-        return None
-    xmin = sregs_.start.min()
-    xmax = sregs_.end.max()
-    return [xmin, xmax]
+        obs = adata.obs
+        max_value = obs.loc[:,[f'{groupby}_{name}' for name in names]].values.max()
 
+        for i, name in enumerate(names):
 
-def data_bars_diverging(data, column, color_above='#3D9970', color_below='#FF4136'):
-    data = [float(d) for d in data[column]]
-    n_bins = 100
-    bounds = [i * (1.0 / n_bins) for i in range(n_bins + 1)]
-    col_max = 3.
-    col_min = -3.
-    ranges = [
-        ((col_max - col_min) * i) + col_min
-        for i in bounds
-    ]
-    midpoint = (col_max + col_min) / 2.
-
-    styles = []
-    for i in range(1, len(bounds)):
-        min_bound = ranges[i - 1]
-        max_bound = ranges[i]
-        min_bound_percentage = bounds[i - 1] * 100
-        max_bound_percentage = bounds[i] * 100
-
-        style = {
-            'if': {
-                'filter_query': (
-                    '{{{column}}} >= {min_bound}' +
-                    (' && {{{column}}} < {max_bound}' if (i < len(bounds) - 1) else '')
-                ).format(column=column, min_bound=min_bound, max_bound=max_bound),
-                'column_id': column
-            },
-            'paddingBottom': 2,
-            'paddingTop': 2
-        }
-        if max_bound > midpoint:
-            background = (
-                """
-                    linear-gradient(90deg,
-                    white 0%,
-                    white 50%,
-                    {color_above} 50%,
-                    {color_above} {max_bound_percentage}%,
-                    white {max_bound_percentage}%,
-                    white 100%)
-                """.format(
-                    max_bound_percentage=max_bound_percentage,
-                    color_above=color_above
-                )
-            )
-        else:
-            background = (
-                """
-                    linear-gradient(90deg,
-                    white 0%,
-                    white {min_bound_percentage}%,
-                    {color_below} {min_bound_percentage}%,
-                    {color_below} 50%,
-                    white 50%,
-                    white 100%)
-                """.format(
-                    min_bound_percentage=min_bound_percentage,
-                    color_below=color_below
-                )
-            )
-        style['background'] = background
-        styles.append(style)
-
-    return styles
-
-class TableManager:
-    def __init__(self, regs_):
-        self.regs_ = regs_
-        self.header = ["Name", "Highlight", "Outside", "LogOdds", "Pvalue"]
-        self.data = {h: [] for h in self.header}
-        self.nrows = 0
-
-    def draw(self):
-        if self.nrows <=0:
-            return ""
-        return dash_table.DataTable(
-          id='datatable',
-          columns=self.draw_header(),
-          data=self.draw_rows(),
-          style_cell={
-             'whiteSpace': 'normal',
-             'height': 'auto',
-         },
-          style_data_conditional=
-          ( data_bars_diverging(self.data, 'LogOdds',
-                                color_above=px.colors.diverging.Picnic[-1],
-                                color_below=px.colors.diverging.Picnic[0])
-          ),
-          page_action='none',
-          style_table={'height': '300px', 'overflowY': 'auto',
-                       }
-        )
-
-    def draw_header(self):
-        return [{'name': h, 'id': h, 'type': 'text' \
-                 if h == 'Name' else 'numeric'} for h in self.header]
-
-    def add_row(self, name, n11, c1, r1, n, ncells):
-        n21 = c1 - n11
-        n12 = r1 - n11
-        n22 = n - n11 - n12 - n21
-        odds, pval = fisher_exact([[n11, n12],
-                                   [n21, n22]],
-                                  alternative='greater')
-        self.data[self.header[0]].append(f'{name} ({ncells})')
-        self.data[self.header[1]].append(n11)
-        self.data[self.header[2]].append(n21)
-        self.data[self.header[3]].append('{:.3f}'.format(np.log2(odds)))
-        self.data[self.header[4]].append('{:.3f}'.format(pval))
-        self.nrows += 1
-
-    def draw_rows(self):
-        return [{h: self.data[h][irow] for h in self.header} \
-                for irow in range(self.nrows)]
+            f = cls(obs, f'{groupby}_{name}', title=f'{name}',
+                    color=adata.uns[colorname][i],
+                    max_value=max_value,
+                    **kwargs) + TrackHeight(.5)
+            if frame is None:
+                frame = f
+            else:
+                frame += f
+            frame += HLine()
+        return frame
 
 
+    @classmethod
+    def selection(cls, frame, adata, selections,
+                   palettes=sc.pl.palettes.zeileis_28,
+                   **kwargs):
+        names = [k for k in selections]
 
-class TrackManager:
-    def __init__(self, regs_, tracknames,
-                 colors,
-                 genes, controlprops):
-        self.regs_ = regs_
-        self.tracknames = tracknames
-        self.trackheight = 3
-        self.locus = get_locus(regs_)
-        self.highlight = get_highlight(regs_)
-        self.controlprops = controlprops
-        self.genes = genes
-        self.colors = colors
-        assert len(tracknames) == len(colors)
-        self.init_trace()
+        colorname = 'selection_colors'
+        if colorname not in adata.uns:
+            adata.uns[colorname] = palettes[:len(names)]
 
-    def allocate(self):
-        if not self.controlprops['overlay']:
-            ntracks = 1
-        else:
-            ntracks = len(self.tracknames)
-        specs=[]
-        for n in range(ntracks):
-            specs += [[{"rowspan": self.trackheight}]]
-            specs += [[None]]*(self.trackheight - 1)
-        specs += [[{"rowspan": 1}]]
+        obs = adata.obs.copy()
+        for i, name in enumerate(selections):
+            sadata = adata[:,adata.var.index.isin(selections[name])]
+            da = np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
+            obs.loc[:,name] = da
 
-        fig = make_subplots(
-            rows=ntracks * self.trackheight + 1,
-            cols=1,
-            specs=specs,
-            shared_xaxes=True,
-            vertical_spacing=0.00,
-        )
-        return fig
-
-    def draw_summary_track(self, trackname):
-        plobjs = []
-        plottype = self.controlprops['plottype']
-        sregs_ = self.regs_
-        if plottype == "bar":
-            plobjs.append(go.Bar(x=sregs_.start,
-                                 y=sregs_[trackname],
-                                 marker=dict(color=self.colors[trackname]),
-                                 name=trackname))
-        else:
-            plobjs.append(go.Scatter(x=sregs_.start,
-                                     y=sregs_[trackname],
-                                     marker=dict(color=self.colors[trackname]),
-                                     mode="lines", name=trackname,))
-
-        rangeannot = self.regs_.apply(lambda row: \
-            f'{row.chrom}:{row.start}-{row.end}', axis=1).values.tolist()
-        plobjs.append(go.Scatter(
-                x=sregs_.start,
-                y=sregs_[trackname],
-                mode="markers",
-                opacity=0,
-                customdata=rangeannot,
-                hovertemplate="y=%{y}<br>%{customdata}<br>" + trackname,
-                showlegend=False,
-            ))
-        return plobjs
-
-    def init_trace(self):
-        self.itrace = 1
-
-    def next_trace(self):
-        if self.controlprops['overlay']:
-            self.itrace += self.trackheight
-
-    def extend_trace(self, fig, plobjs):
-        for plobj in plobjs:
-            fig.add_trace(plobj, row=self.itrace, col=1)
-        return fig
-
-    def draw_tracks(self, fig):
-        self.init_trace()
-        for trackname in self.tracknames:
-            self.extend_trace(fig, self.draw_summary_track(trackname))
-            self.next_trace()
-
-        title = f"Window: {self.locus[0]}:{self.locus[1]}-{self.locus[2]}"
-        if self.highlight is not None:
-            title += f"<br>Highlight: {self.locus[0]}:{self.highlight[0]}-{self.highlight[1]}"
-
-        fig.layout.update(
-            dict(title=title, dragmode=self.controlprops['dragmode'],
-                 clickmode="event+select",
-                 template="plotly_white")
-        )
-        return fig
-
-    def draw_highlight(self, fig):
-        if self.highlight is None:
-            return fig
-
-        xmin, xmax = self.highlight
-        return fig.add_shape(
-            type="rect",
-            xref='x',
-            yref='paper',
-            x0=xmin,
-            y0=0,
-            x1=xmax,
-            y1=1,
-            fillcolor="LightSalmon",
-            opacity=0.3,
-            layer="below",
-            line_width=0,
-        )
-
-    def draw_annotation(self, fig):
-        ntracks = len(self.tracknames) if self.controlprops['overlay'] else 1
-        chrom, start, end = self.locus
-        plobjs = _draw_gene_annotation(fig, self.genes, chrom, start, end)
-        for plobj in plobjs or []:
-            fig.add_trace(
-                plobj,
-                row=ntracks*self.trackheight + 1,
-                col=1,
-            )
-        if plobjs is not None:
-            fig.layout[f"yaxis{ntracks+1}"]["showticklabels"] = False
-            fig.layout[f"yaxis{ntracks+1}"]["showgrid"] = False
-            fig.layout[f"yaxis{ntracks+1}"]["zeroline"] = False
-            fig.layout[f"xaxis{ntracks+1}"]["showgrid"] = False
-            fig.layout[f"xaxis{ntracks+1}"]["zeroline"] = False
-        else:
-            fig.layout["xaxis"]["showticklabels"] = True
-        return fig
-
-    def draw(self):
-        fig = self.allocate()
-        fig = self.draw_tracks(fig)
-        fig = self.draw_highlight(fig)
-        fig = self.draw_annotation(fig)
-
-        return fig
+        max_value = obs.loc[:,[name for name in selections]].values.max()
+        for i, name in enumerate(selections):
+            f = cls(obs, name, title=f'{name}',
+                    color=adata.uns[colorname][i],
+                    max_value=max_value,
+                    **kwargs) + TrackHeight(.9)
+            if frame is None:
+                frame = f
+            else:
+                frame += f
+            frame += HLine()
+        return frame
 
 
+    def __init__(self, obs, group, **kwargs):
+        properties = HistBase.DEFAULT_PROPERTIES.copy()
+        properties.update({
+            'type': properties['style'],
+            "file": 'dummy',
+            **kwargs,
+        })
+        super().__init__(**properties)
+        self.obs = obs
+        self.group = group
 
-def _draw_gene_annotation(fig, genes, chrom, start, end):
-    wbed = BedTool([Interval(chrom, start, end)])
-    regions = genes.intersect(wbed)
-    xs = []
-    ys = []
-
-    midpoints = []
-    names = []
-    offset = 0
-    lastiv = []
-
-    rangeannot = []
-    for i, region in enumerate(regions):
-        names.append(region.name)
-
-        # draw arrow to indicate direction
-        if region.strand != "-":
-            xs += [
-                region.start,
-                region.start,
-                region.end,
-                region.end + 1000,
-                region.end,
-                region.start,
-                None,
-            ]
-            ys += [0, 1, 1, 0.5, 0, 0, None]
-            midpoints.append(region.start)
-        else:
-            xs += [
-                region.start,
-                region.start - 1000,
-                region.start,
-                region.end,
-                region.end,
-                region.start,
-                None,
-            ]
-            ys += [0, 0.5, 1, 1, 0, 0, None]
-            midpoints.append(region.end)
-        rangeannot.append(f"{region.chrom}:{region.start}-{region.end};{region.strand}")
-
-    if len(midpoints) > 0:
-        plobjs = [
-            go.Scatter(
-                x=xs,
-                y=ys,
-                mode="lines",
-                fill="toself",
-                name="Genes",
-                marker=dict(color="goldenrod"),
-            ),
-            go.Scatter(
-                x=midpoints,
-                y=[0.5] * len(midpoints),
-                text=names,
-                mode="text",
-                opacity=0.0,
-                name="Genes",
-                customdata=rangeannot,
-                hovertemplate="%{text}<br>%{customdata}",
-                showlegend=False,
-            ),
-        ]
-        return plobjs
+    def fetch_data(self, gr, **kwargs):
+        chrom, start, end = split_genome_range(gr)
+        obs = self.obs
+        obs = obs.loc[(obs.chrom==chrom) & (obs.start>=start) & (obs.end<=end),self.group]
+        return obs.values
 
 
 
@@ -465,42 +209,48 @@ logging.debug(args)
 # load data
 ##############
 
+genefile = args['genes']
 genes = BedTool(args['genes'])
 
 logging.debug(f'Number of genes: {len(genes)}')
 
-adata = read_h5ad(args['matrix'])
-adata.X.data[adata.X.data>0]=1
+ADATA = read_h5ad(args['matrix'])
+ADATA.X.data[ADATA.X.data>0]=1
 
-use_emb = adata.uns['embeddings'][0]
-#adata.var.loc[:,'dim1'] = adata.varm[use_emb][:,0]
-#adata.var.loc[:,'dim2'] = adata.varm[use_emb][:,1]
-adata.var.loc[:, "nFrags"] = np.asarray(adata.X.sum(0)).flatten()
-adata.obs.loc[:, "nFrags"] = np.asarray(adata.X.sum(1)).flatten()
 
-adata.uns['nFrags'] = adata.var.nFrags.sum()
-#readsincell = np.asarray(adata.X.sum(0)).flatten()
-#readsinregion = np.asarray(adata.X.sum(1)).flatten()
+use_emb = ADATA.uns['embeddings'][0]
+ADATA.var.loc[:, "nFrags"] = np.asarray(ADATA.X.sum(0)).flatten()
+ADATA.obs.loc[:, "nFrags"] = np.asarray(ADATA.X.sum(1)).flatten()
 
-#totcellcount = np.asarray(adata.X.sum(0)).flatten()
-#totcellcount = totcellcount.astype("float") / totcellcount.sum()
+ADATA.uns['nFrags'] = ADATA.var.nFrags.sum()
 
-logging.debug(f'CountMatrix: {adata}')
-print(repr(adata))
 
-regs = adata.obs.copy()
-regs["total_coverage"] = cell_coverage(adata, None, None, False)
-
-chroms = adata.obs.chrom.unique().tolist()
+ADATA.obs.loc[:, "total"] = ADATA.obs.loc[:, "nFrags"]*1e5 / ADATA.uns['nFrags']
+chroms = ADATA.obs.chrom.unique().tolist()
 
 options = [dict(label=c, value=c) for c in chroms]
-chromlens = {c: regs.query(f'chrom == "{c}"').end.max() for c in chroms}
-
-celldepth = np.asarray(adata.X.sum(0)).flatten()
+chromlens = {c: ADATA.obs.query(f'chrom == "{c}"').end.max() for c in chroms}
 
 genelocus = [dict(label=g.name,
-                  value=f'{g.chrom}:{g.start}-{g.end}') for g in genes]
+                  value=f'{g.chrom}:{max(1, g.start-10000)}-{min(chromlens[g.chrom], g.end+10000)}') for g in genes
+             if g.chrom in chromlens]
 
+for groups in ADATA.var.columns:
+    if groups == 'nFrags':
+        continue
+    logging.debug(f'pre-compile {groups}')
+    tracknames = sorted(ADATA.var[groups].unique().tolist())
+    #names
+    #data = np.zeros((len(names), adata.shape[0]))
+    for i, track in enumerate(tracknames):
+
+        sadata = ADATA[:,ADATA.var[groups]==track]
+
+        ADATA.obs.loc[:, f'{groups}_{track}'] = \
+  np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
+
+logging.debug(f'CountMatrix: {ADATA}')
+print(repr(ADATA))
 ##############
 # instantiate app
 ##############
@@ -539,30 +289,6 @@ def get_selection(session_id, datahash, data=None):
     logging.debug(f'get_selection({datahash})')
     return cache.get(datahash)
 
-def get_region_selection(chrom, interval, highlight):
-    @cache.memoize()
-    def _get_region_selection(chrom, interval, highlight):
-
-        regs_ = regs.copy()
-        start, end = interval
-
-        regs_ = regs_.query(f'chrom == "{chrom}" & start >= {int(start) -1}')
-
-        end = max(regs_.iloc[0, :].end, end)
-        regs_ = regs_.query(f'end <= {end}')
-        regs_.insert(regs_.shape[1], "annot", "other", True)
-
-        rmin, rmax = regs_.start.min(), regs_.end.max()
-
-        regs_.insert(
-            regs_.shape[1],
-            "highlight",
-            regs_.apply(_highlight, axis=1, args=(rmin, rmax, highlight)),
-            True,
-        )
-        return regs_.to_json()
-
-    return pd.read_json(_get_region_selection(chrom, interval, highlight))
 
 
 ##############
@@ -581,21 +307,26 @@ def make_server():
                     id="annotation-selector",
                     options=[
                         {"label": name, "value": name}
-                        for name in adata.var.columns if name != 'nFrags'
+                        for name in ADATA.var.columns if name != 'nFrags'
                     ]
                     + [{"label": "None", "value": "None"}],
                     value="None",
+                    style=dict(width="40%", display="inline-block"),
                 ),
                 html.Button('Clear all selections',
                     id="clear-selection",
                     n_clicks=0,
+                    title='Clear all selections in the embedding',
+                    style=dict(width="20%", display="inline-block"),
                 ),
                 html.Button('Undo last selection',
                     id="undo-last-selection",
                     n_clicks=0,
+                    title='Clear last selections in the embedding',
+                    style=dict(width="20%", display="inline-block"),
                 ),
             ],
-            style=dict(width="69%", display="inline-block"),
+            style=dict(width="49%", display="inline-block"),
         ),
         html.Div(
             [
@@ -608,78 +339,73 @@ def make_server():
                     )],
                 ),
                 html.Div([
-                    html.Label(html.B("Chromosome:")),
-                    dcc.Dropdown(id="chrom-selector", value=chroms[0],
-                                 options=options,
-                                 disabled=True,
-                                 style=dict(width="70%", display="inline-block"),),
-                ],style={'display': 'none'}),
-                html.Div([
-                    html.Label(html.B("Position:")),
-                    dcc.RangeSlider(
-                        id="locus-selector",
-                        min=0,
-                        max=chromlens[chroms[0]],
-                        step=1000,
-                        disabled=True,
-                        value=[1, 1000000],),
-                ],style={'display': 'none'}),
-                html.Div([
-                    html.Label(html.B("Highlight:")),
-                    dcc.RangeSlider(
-                        id="highlight-selector", min=0, max=100, value=[25, 75],
-                        disabled=True,
-                    ),
-                ], style={'display':'none'}),
-                html.Div([
-                    html.Label(html.B("Plot-type:")),
-                    dcc.RadioItems(
-                        id="plot-type-selector",
-                        options=[
-                            {"label": "line", "value": "line"},
-                            {"label": "bar", "value": "bar"},
-                        ],
-                        value="line",
-                        style=dict(width="49%", display="inline-block"),
-                    ),
+                    html.Label(html.B("Locus:")),
+                    dcc.Input(id="locus-selector",
+                              type="text",
+                              value="chr1:1-1000000",
+                              style=dict(width="70%", display="inline-block"),),
                 ]),
                 html.Div([
-                    html.Label(html.B("Normalize:")),
-                    dcc.RadioItems(
-                        id="normalize-selector",
-                        options=[
-                            {"label": "No", "value": "No"},
-                            {"label": "Yes", "value": "Yes"},
-                        ],
-                        value="No",
-                        style=dict(width="49%", display="inline-block"),
-                    ),
+                    html.Label(html.B("Zoom in:")),
+                    html.Button("10x", id="zoom-in_10",
+                              n_clicks=0,
+                              style=dict(width="7%", display="inline-block"),),
+                    html.Button("3x", id="zoom-in_3",
+                              n_clicks=0,
+                              style=dict(width="7%", display="inline-block"),),
+                    html.Button("1.5x", id="zoom-in_15",
+                              n_clicks=0,
+                              style=dict(width="7%", display="inline-block"),),
+                    html.Label(html.B("Zoom out:")),
+                    html.Button("1.5x", id="zoom-out_15",
+                              n_clicks=0,
+                              style=dict(width="7%", display="inline-block"),),
+                    html.Button("3x", id="zoom-out_3",
+                              n_clicks=0,
+                              style=dict(width="7%", display="inline-block"),),
+                    html.Button("10x", id="zoom-out_10",
+                              n_clicks=0,
+                              style=dict(width="7%", display="inline-block"),),
                 ]),
                 html.Div([
-                    html.Label(html.B("Overlay tracks:")),
-                    dcc.RadioItems(
-                        id="overlay-track-selector",
-                        options=[
-                            {"label": "No", "value": "No"},
-                            {"label": "Yes", "value": "Yes"},
-                        ],
-                        value="No",
-                        style=dict(width="49%", display="inline-block"),
-                    ),
+                    html.Label(html.B("Move:")),
+                    html.Button("<<<", id="move-left_3",
+                              title="move left 95%",
+                              n_clicks=0,
+                              style=dict(width="10%", display="inline-block"),),
+                    html.Button("<<", id="move-left_2",
+                              title="move left 45%",
+                              n_clicks=0,
+                              style=dict(width="10%", display="inline-block"),),
+                    html.Button("<", id="move-left_1",
+                              title="move left 15%",
+                              n_clicks=0,
+                              style=dict(width="10%", display="inline-block"),),
+                    html.Button(">", id="move-right_1",
+                              title="move right 15%",
+                              n_clicks=0,
+                              style=dict(width="10%", display="inline-block"),),
+                    html.Button(">>", id="move-right_2",
+                              title="move right 45%",
+                              n_clicks=0,
+                              style=dict(width="10%", display="inline-block"),),
+                    html.Button(">>>", id="move-right_3",
+                              n_clicks=0,
+                              title="move right 95%",
+                              style=dict(width="10%", display="inline-block"),),
                 ]),
-                html.Div(id="test-field", style={"display": "none"}),
             ],
-            style=dict(width="29%", display="inline-block"),
+            style=dict(width="45%", display="inline-block"),
         ),
         html.Br(),
         html.Div(
             [dcc.Graph(id="scatter-plot", style={'height': '500px'})],
-            style=dict(width="49%", display="inline-block"),
-        ),
+            style=dict(width="49%", display="inline-block", verticalAlign='top'),
+        id='divforscatter',),
         html.Div(
             [
-                dcc.Graph(id="genome-track", style={'height': '500px'}),
-            ],
+                html.Img(id="genome-track", style=dict(verticalAlign='top')),
+            ], id='divforgenome',
             style=dict(width="49%", display="inline-block"),
         ),
         html.Br(),
@@ -689,10 +415,10 @@ def make_server():
                     id="session-id", data=session_id,
                 ),
                 dcc.Store(
-                    id="dragmode-track", data="select",
+                    id="dragmode-scatter", data="select",
                 ),
                 dcc.Store(
-                    id="dragmode-scatter", data="select",
+                    id="locus-store", data="chr1:1-1000000",
                 ),
                 dcc.Store(
                     id="selection-store", data=None,
@@ -709,58 +435,79 @@ app.layout = make_server
 # app callbacks
 ############
 
+def zoom(locus, factor):
+    chrom, start, end = split_genome_range(locus)
+    window = int((end - start)*factor/2)
+    mid = (end+start)//2
+    newl = f'{chrom}:{max(1, mid-window)}-{min(mid+window, chromlens[chrom])}'
+    return newl
 
 
-@app.callback(
-    Output(component_id="chrom-selector", component_property="value"),
-    [Input(component_id="gene-selector", component_property="value")],
-)
-@log_layer
-def update_chrom_selector_value(coord):
-    if coord is None:
-        raise PreventUpdate
-    chrom = coord.split(':')[0]
-    return chrom
-
-
-@app.callback(
-    Output(component_id="locus-selector", component_property="max"),
-    [Input(component_id="chrom-selector", component_property="value")],
-)
-@log_layer
-def update_locus_selector_maxrange(locus):
-    if locus is None:
-        raise PreventUpdate
-    chrom = locus.split(':')[0]
-    return chromlens[chrom]
-
+def move(locus, pshift):
+    chrom, start, end = split_genome_range(locus)
+    shift = int((end-start)*pshift)
+    newl = f'{chrom}:{max(1, start+shift)}-{min(end+shift, chromlens[chrom])}'
+    return newl
 
 @app.callback(
     Output(component_id="locus-selector", component_property="value"),
-    [Input(component_id="gene-selector", component_property="value"),
-     Input(component_id="genome-track", component_property="relayoutData"),],
+    [
+     Input(component_id="gene-selector", component_property="value"),
+     Input(component_id="zoom-in_15", component_property="n_clicks"),
+     Input(component_id="zoom-in_3", component_property="n_clicks"),
+     Input(component_id="zoom-in_10", component_property="n_clicks"),
+     Input(component_id="zoom-out_15", component_property="n_clicks"),
+     Input(component_id="zoom-out_3", component_property="n_clicks"),
+     Input(component_id="zoom-out_10", component_property="n_clicks"),
+     Input(component_id="move-left_1", component_property="n_clicks"),
+     Input(component_id="move-left_2", component_property="n_clicks"),
+     Input(component_id="move-left_3", component_property="n_clicks"),
+     Input(component_id="move-right_1", component_property="n_clicks"),
+     Input(component_id="move-right_2", component_property="n_clicks"),
+     Input(component_id="move-right_3", component_property="n_clicks"),
+    ],
+    [
+     State(component_id="locus-store", component_property="data"),
+    ],
+
 )
 @log_layer
-def update_locus_selector_value(coord, relayout):
+def update_locus_selector_value(gcoord,zi15,zi5,zi10,zo15,zo5,zo10,ml1,ml2,ml3,mr1,mr2,mr3,storelocus):
 
     ctx = dash.callback_context
     if ctx.triggered is None:
         raise PreventUpdate
 
-    elif 'genome-track.relayoutData' == ctx.triggered[0]['prop_id'] and \
-       ctx.triggered[0]['value'] is not None and \
-       'xaxis.range[0]' in ctx.triggered[0]['value']:
-        interval = [
-            max(0, int(relayout["xaxis.range[0]"])),
-            int(relayout["xaxis.range[1]"]),
-        ]
-        interval.sort()
-        return interval
+    if ctx.triggered[0]['prop_id'] == 'gene-selector.value':
+        return gcoord
 
-    elif 'gene-selector.value' == ctx.triggered[0]['prop_id']:
+    if ctx.triggered[0]['prop_id'] == 'zoom-in_15.n_clicks':
+        return zoom(storelocus, 1/1.5)
+    if ctx.triggered[0]['prop_id'] == 'zoom-in_3.n_clicks':
+        return zoom(storelocus, 1/3)
+    if ctx.triggered[0]['prop_id'] == 'zoom-in_10.n_clicks':
+        return zoom(storelocus, 1/10)
 
-        start, end = coord.split(':')[1].split('-')
-        return [int(start), int(end)]
+    if ctx.triggered[0]['prop_id'] == 'zoom-out_15.n_clicks':
+        return zoom(storelocus, 1.5)
+    if ctx.triggered[0]['prop_id'] == 'zoom-out_3.n_clicks':
+        return zoom(storelocus, 3)
+    if ctx.triggered[0]['prop_id'] == 'zoom-out_10.n_clicks':
+        return zoom(storelocus, 10)
+
+    if ctx.triggered[0]['prop_id'] == 'move-left_1.n_clicks':
+        return move(storelocus, -.15)
+    if ctx.triggered[0]['prop_id'] == 'move-left_2.n_clicks':
+        return move(storelocus, -.45)
+    if ctx.triggered[0]['prop_id'] == 'move-left_3.n_clicks':
+        return move(storelocus, -.95)
+
+    if ctx.triggered[0]['prop_id'] == 'move-right_1.n_clicks':
+        return move(storelocus, .15)
+    if ctx.triggered[0]['prop_id'] == 'move-right_2.n_clicks':
+        return move(storelocus, .45)
+    if ctx.triggered[0]['prop_id'] == 'move-right_3.n_clicks':
+        return move(storelocus, .95)
 
     raise PreventUpdate
 
@@ -778,15 +525,16 @@ def update_locus_selector_value(coord, relayout):
     ]
 )
 @log_layer
-def update_scatter(annot, selection_store, dragmode, session_id):
+def embedding_callback(annot, selection_store, dragmode, session_id):
     co = {}
-    if annot in adata.var.columns:
-        tracknames = sorted(adata.var[annot].unique().tolist())
+    if annot in ADATA.var.columns:
+        tracknames = sorted(ADATA.var[annot].unique().tolist())
     else:
         tracknames = ['None']
 
     colors = {trackname: annotationcolors[i%len(annotationcolors)] for i, \
               trackname in enumerate(tracknames)}
+    colors['None'] = 'black'
 
     if selection_store is not None and len(selection_store) > 0:
        selection_hash = selection_store[-1]
@@ -796,9 +544,9 @@ def update_scatter(annot, selection_store, dragmode, session_id):
                  trackname in enumerate(selnames)})
        tracknames += selnames
 
-    df = adata.var.copy()
-    df.loc[:, 'dim1'] = adata.varm[use_emb][:,0]
-    df.loc[:, 'dim2'] = adata.varm[use_emb][:,1]
+    df = ADATA.var.copy()
+    df.loc[:, 'dim1'] = ADATA.varm[use_emb][:,0]
+    df.loc[:, 'dim2'] = ADATA.varm[use_emb][:,1]
 
     fig = px.scatter(
         df,
@@ -807,7 +555,7 @@ def update_scatter(annot, selection_store, dragmode, session_id):
         hover_name=df.index,
         opacity=0.3,
         color=annot if annot != "None" else None,
-        color_discrete_sequence=[annotationcolors[0]] if annot == "None" else None,
+        color_discrete_sequence=['black'] if annot == "None" else None,
         color_discrete_map=colors,
         custom_data=[df.index],
         template="plotly_white",
@@ -837,76 +585,63 @@ def update_scatter(annot, selection_store, dragmode, session_id):
 
 
 @app.callback(
-    Output(component_id="genome-track", component_property="figure"),
+    Output(component_id="genome-track", component_property="src"),
     [
-        Input(component_id="chrom-selector", component_property="value"),
+        #Input(component_id="chrom-selector", component_property="value"),
         Input(component_id="locus-selector", component_property="value"),
-        Input(component_id="plot-type-selector", component_property="value"),
-        Input(component_id="highlight-selector", component_property="value"),
-        Input(component_id="normalize-selector", component_property="value"),
-        Input(component_id="overlay-track-selector", component_property="value"),
         Input(component_id="annotation-selector", component_property="value"),
         Input(component_id="selection-store", component_property="data"),
     ],
     [
-        State(component_id="dragmode-track", component_property="data"),
         State(component_id="session-id", component_property="data"),
     ],
 )
 @log_layer
-def update_summary(chrom, interval, plottype,
-                   highlight, normalize, overlay,
-                   annotation, selectionstore, dragmode, session_id):
-    normalize = True if normalize == "Yes" else False
-    overlay = True if overlay == "No" else False
-
-    if chrom is None:
+def genome_tracks_callback(locus,
+                   #highlight, overlay,
+                   annotation, selectionstore, session_id):
+    if locus is None:
         raise PreventUpdate
-    if interval is None:
-        raise PreventUpdate
-
-    regs_ = get_region_selection(chrom, interval, highlight)
-
-    tracknames = ['total_coverage']
-    if normalize:
-        regs_.loc[:,'total_coverage'] /= adata.uns['nFrags']*1e5
-
-    if annotation != 'None':
-
-        df = adata.var
-
-        tracknames = sorted(df[annotation].unique().tolist())
-
-        for trackname in tracknames:
-            cell_ids =  df[df[annotation] == trackname].index
-            regs_.loc[:,trackname] = cell_coverage(adata, regs_.index, cell_ids, normalize)
-
-    colors = {trackname: annotationcolors[i%len(annotationcolors)] for i, \
-              trackname in enumerate(tracknames)}
-
+    chrom, start, end = split_genome_range(locus)
+    #chrom, start, end = interval
+    frame = Frame(width=15, title=chrom, fontsize=5)
+    frame += XAxis(fontsize=7, title=chrom)
+    sada = ADATA[(ADATA.obs.chrom==chrom) & (ADATA.obs.start>=start) & (ADATA.obs.end<=end),:]
+    frame += AggregateTrack(sada, fontsize=5) + TrackHeight(.5) #+ Spacer(.1)
+    if annotation != "None":
+        frame = SingleCellTrack.pseudobulk(frame, sada, annotation, fontsize=5)
     if selectionstore is not None:
-        # get cells from the cell selection store
-        selnames = []
         selcells = get_cells(session_id, selectionstore[-1])
-        for k in selcells or []:
-            cell_ids = selcells[k]
-            regs_.loc[:,k] = cell_coverage(adata, regs_.index, cell_ids, normalize)
-            selnames.append(k)
-        colors.update({trackname: selectioncolors[i%len(selectioncolors)] for i, \
-                  trackname in enumerate(selnames)})
-        tracknames += selnames
+        if selcells is not None:
+            frame = SingleCellTrack.selection(frame, sada, selcells, fontsize=5)
+
+    frame += Spacer(.3)
+    frame += BED(genefile, title='Genes')
+    fig = frame.plot(f'{chrom}:{start}-{end}')
+    buf = io.BytesIO()
+    fig.savefig(buf, format = "png", bbox_inches = "tight", transparent=False)
+    data = base64.b64encode(buf.getbuffer()).decode("ascii")
+    return f"data:image/png;base64,{data}"
 
 
-    controlprops = {'plottype': plottype,
-                    'dragmode': dragmode,
-                    'overlay': overlay}
+@app.callback(
+    Output(component_id="locus-store", component_property="data"),
+    [
+     Input(component_id="locus-selector", component_property="value"),
+    ],
+)
+@log_layer
+def locus_store_callback(coord):
 
-    trackmanager = TrackManager(regs_, tracknames,
-                                colors,
-                                genes, controlprops)
-    fig = trackmanager.draw()
+    ctx = dash.callback_context
+    if ctx.triggered is None:
+        raise PreventUpdate
 
-    return fig
+    if  ctx.triggered[0]['prop_id'] == 'locus-selector.value':
+
+        return coord
+
+    raise PreventUpdate
 
 
 @app.callback(
@@ -960,7 +695,7 @@ def selection_store(selected, clicked, undolast, prev_hash, session_id):
     # got some new selected points
     sel = [point["customdata"][0] for point in selected["points"]]
     cell_ids = {selname:
-                adata.var[adata.var.index.isin(sel)].index.tolist()}
+                ADATA.var[ADATA.var.index.isin(sel)].index.tolist()}
 
     selectionpoints = dict()
     if 'range' in selected:
@@ -987,130 +722,118 @@ def selection_store(selected, clicked, undolast, prev_hash, session_id):
     new_hash = prev_hash + [data_md5]
 
     get_cells(session_id, new_hash[-1], new_cells)
+
     get_selection(session_id, new_hash[-1], new_selection)
 
     return new_hash
 
 
-@app.callback(
-    Output(component_id="stats-field", component_property="children"),
-    [
-        Input(component_id="chrom-selector", component_property="value"),
-        Input(component_id="locus-selector", component_property="value"),
-        Input(component_id="highlight-selector", component_property="value"),
-        Input(component_id="annotation-selector", component_property="value"),
-        Input(component_id="selection-store", component_property="data"),
-    ],
-    [
-     State(component_id="session-id", component_property="data"),
-    ],
-)
-@log_layer
-def update_statistics(chrom, interval,
-                      highlight, annotation,
-                      selectionstore, session_id):
-    if chrom is None:
-        raise PreventUpdate
-    if interval is None:
-        raise PreventUpdate
-
-    start, end = interval
-    regs_ = get_region_selection(chrom, interval, highlight)
-
-    regs_ = regs_[regs_.highlight == "inside"]
-
-    region_ids = regs_.index
-
-    tablemanager = TableManager(regs_)
-
-    if annotation != 'None':
-        df = adata.var
-        tracknames = sorted(df[annotation].unique().tolist())
-
-        for trackname in tracknames:
-            sadata = adata[adata.obs.index.isin(region_ids), adata.var[annotation]==trackname]
-            n11 = sadata.X.sum()
-
-            c1 = sadata.var['nFrags'].sum()
-            r1 = sadata.obs['nFrags'].sum()
-
-            n = sadata.uns['nFrags']
-            tablemanager.add_row(trackname, n11, c1, r1, n, sadata.shape[1])
-
-    if selectionstore is not None:
-        # get cells from the cell selection store
-        selcells = get_cells(session_id, selectionstore[-1])
-        for k in selcells or []:
-
-            sadata = adata[adata.obs.index.isin(region_ids), adata.var.index.isin(selcells[k])]
-            n11 = sadata.X.sum()
-
-            c1 = sadata.var['nFrags'].sum()
-            r1 = sadata.obs['nFrags'].sum()
-
-            n = sadata.uns['nFrags']
-            tablemanager.add_row(k, n11, c1, r1, n, sadata.shape[1])
-
-    tab = tablemanager.draw()
-    return tab
-
-
-@app.callback(
-    Output(component_id="highlight-selector", component_property="value"),
-    [
-        Input(component_id="locus-selector", component_property="value"),
-        Input(component_id="genome-track", component_property="selectedData"),
-    ],
-)
-@log_layer
-def update_highlight_selector(interval, selected):
-    ctx = dash.callback_context
-
-    if ctx.triggered is None:
-        raise PreventUpdate
-
-    if ctx.triggered[0]['prop_id'] == '.':
-        #inital value
-        return [25, 75]
-
-    if interval is None or selected is None:
-        raise PreventUpdate
-
-    windowsize = interval[1] - interval[0]
-
-    if 'range' not in selected and 'lassoPoints' not in selected:
-        raise PreventUpdate
-    nums = None
-    if 'range' in selected:
-        for key in selected['range']:
-            if 'x' in key:
-                nums = [int(point) for point in selected['range'][key]]
-    if 'lassoPoints' in selected:
-        for key in selected['lassoPoints']:
-            if 'x' in key:
-                nums = [int(point) for point in selected['lassoPoints'][key]]
-
-    if nums is None:
-        raise PreventUpdate
-    ranges = [
-        min(100, max(0, int((min(nums) - interval[0]) / windowsize * 100))),
-        min(100, max(0, int((max(nums) - interval[0]) / windowsize * 100))),
-    ]
-    return ranges
+#@app.callback(
+#    Output(component_id="stats-field", component_property="children"),
+#    [
+#        Input(component_id="chrom-selector", component_property="value"),
+#        Input(component_id="locus-selector", component_property="value"),
+#        Input(component_id="highlight-selector", component_property="value"),
+#        Input(component_id="annotation-selector", component_property="value"),
+#        Input(component_id="selection-store", component_property="data"),
+#    ],
+#    [
+#     State(component_id="session-id", component_property="data"),
+#    ],
+#)
+#@log_layer
+#def update_statistics(chrom, interval,
+#                      highlight, annotation,
+#                      selectionstore, session_id):
+#    if chrom is None:
+#        raise PreventUpdate
+#    if interval is None:
+#        raise PreventUpdate
+#
+#    start, end = interval
+#    regs_ = get_region_selection(chrom, interval, highlight)
+#
+#    regs_ = regs_[regs_.highlight == "inside"]
+#
+#    region_ids = regs_.index
+#
+#    tablemanager = TableManager(regs_)
+#
+#    if annotation != 'None':
+#        df = adata.var
+#        tracknames = sorted(df[annotation].unique().tolist())
+#
+#        for trackname in tracknames:
+#            sadata = adata[adata.obs.index.isin(region_ids), adata.var[annotation]==trackname]
+#            n11 = sadata.X.sum()
+#
+#            c1 = sadata.var['nFrags'].sum()
+#            r1 = sadata.obs['nFrags'].sum()
+#
+#            n = sadata.uns['nFrags']
+#            tablemanager.add_row(trackname, n11, c1, r1, n, sadata.shape[1])
+#
+#    if selectionstore is not None:
+#        # get cells from the cell selection store
+#        selcells = get_cells(session_id, selectionstore[-1])
+#        for k in selcells or []:
+#
+#            sadata = adata[adata.obs.index.isin(region_ids), adata.var.index.isin(selcells[k])]
+#            n11 = sadata.X.sum()
+#
+#            c1 = sadata.var['nFrags'].sum()
+#            r1 = sadata.obs['nFrags'].sum()
+#
+#            n = sadata.uns['nFrags']
+#            tablemanager.add_row(k, n11, c1, r1, n, sadata.shape[1])
+#
+#    tab = tablemanager.draw()
+#    return tab
 
 
-@app.callback(
-    Output(component_id="dragmode-track", component_property="data"),
-    [Input(component_id="genome-track", component_property="relayoutData"),
-     ],
-)
-@log_layer
-def update_dragmode_selector(relayout):
-    if relayout is None:
-        raise PreventUpdate
-    if "dragmode" not in relayout:
-        raise PreventUpdate
-    return relayout["dragmode"]
+#@app.callback(
+#    Output(component_id="highlight-selector", component_property="value"),
+#    [
+#        Input(component_id="locus-selector", component_property="value"),
+#        #Input(component_id="genome-track", component_property="selectedData"),
+#    ],
+#)
+#@log_layer
+#def update_highlight_selector(interval):
+#    ctx = dash.callback_context
+#
+#    if ctx.triggered is None:
+#        raise PreventUpdate
+#
+#    if ctx.triggered[0]['prop_id'] == '.':
+#        #inital value
+#        return [25, 75]
+#
+#    if interval is None or selected is None:
+#        raise PreventUpdate
+#
+#    windowsize = interval[1] - interval[0]
+#    selected = interval[1] - interval[0]
+#
+#    if 'range' not in selected and 'lassoPoints' not in selected:
+#        raise PreventUpdate
+#    nums = None
+#    if 'range' in selected:
+#        for key in selected['range']:
+#            if 'x' in key:
+#                nums = [int(point) for point in selected['range'][key]]
+#    if 'lassoPoints' in selected:
+#        for key in selected['lassoPoints']:
+#            if 'x' in key:
+#                nums = [int(point) for point in selected['lassoPoints'][key]]
+#
+#    if nums is None:
+#        raise PreventUpdate
+#    ranges = [
+#        min(100, max(0, int((min(nums) - interval[0]) / windowsize * 100))),
+#        min(100, max(0, int((max(nums) - interval[0]) / windowsize * 100))),
+#    ]
+#    return ranges
 
 @app.callback(
     Output(component_id="dragmode-scatter", component_property="data"),
@@ -1125,11 +848,12 @@ def update_dragmode_scatter(relayout):
         raise PreventUpdate
     return relayout["dragmode"]
 
+
 def main():
     ############
     # run server
     ############
-    app.run_server(debug=True, port=args['port'])
+    app.run_server(debug=False, port=args['port'])
 
 if __name__ == '__main__':
     main()
