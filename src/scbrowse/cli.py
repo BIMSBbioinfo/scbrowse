@@ -15,55 +15,45 @@ Why does this file exist, and why not put this in __main__?
   Also see (1) from http://click.pocoo.org/5/setuptools/#setuptools-integration
 """
 import io
+import time
 import base64
 import os
-import time
-import argparse
 from functools import wraps
 from copy import copy
 import logging
-import argparse
 import dash  # pylint: disable=import-error
-import dash_table
+from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 import dash_core_components as dcc  # pylint: disable=import-error
 import dash_html_components as html  # pylint: disable=import-error
 import matplotlib.pyplot as plt
 import plotly.graph_objs as go  # pylint: disable=import-error
 import plotly.express as px
-import plotly.tools as tls
-from plotly.subplots import make_subplots
-from scipy.stats import fisher_exact
 from flask_caching import Cache
 from flask import Flask
 import hashlib
 import json
-
-from scipy.sparse import diags
+from multiprocessing import Pool
+from scbrowse.utils import figure_encoder, draw_figure
 import numpy as np
-from dash.dependencies import Input, Output, State
-from pybedtools import BedTool, Interval
+from pybedtools import BedTool
 
-import pandas as pd
 from anndata import read_h5ad
 import scanpy as sc
 import uuid
 import coolbox
 from coolbox.api import *
 from coolbox.utilities import split_genome_range
+from scbrowse.utils import SingleCellTrack
 
-from matplotlib import rcParams
-rcParams.update({'figure.autolayout': True})
-
-args = dict(
-            matrix=os.environ['SCBROWSE_MATRIX'],
+args = dict(matrix=os.environ['SCBROWSE_MATRIX'],
             genes=os.environ['SCBROWSE_GENES'],
             port=8051,
             logs=os.environ['SCBROWSE_LOGS'])
 
-print(args)
-annotationcolors = sc.pl.palettes.vega_20_scanpy#px.colors.qualitative.Light24
-selectioncolors = sc.pl.palettes.zeileis_28#px.colors.qualitative.Dark24
+print(""" scbrowser startup .... """)
+annotationcolors = sc.pl.palettes.vega_20_scanpy
+selectioncolors = sc.pl.palettes.zeileis_28
 
 ###############
 # data helper functions
@@ -77,7 +67,6 @@ def log_layer(fn):
             return {k: props[k] for k in props \
                     if k not in ['points',
                              'scatter-plot.selectedData']}
-                             #'genome-track.selectedData']}
 
         logging.debug(f'wrap:callb:'
                       f'outputs:{_extr(ctx.outputs_list)}:'
@@ -93,107 +82,6 @@ def log_layer(fn):
             raise
 
     return _log_wrapper
-
-
-class AggregateTrack(HistBase):
-    def __init__(self, adata, **kwargs):
-        properties = HistBase.DEFAULT_PROPERTIES.copy()
-        properties.update({
-            'type': properties['style'],
-            "file": 'dummy',
-            'title': 'total',
-            'color': 'black',
-            #'min_value': 0.0,
-            **kwargs,
-        })
-
-        super().__init__(**properties)
-        self.adata = adata
-
-    def fetch_data(self, gr, **kwargs):
-        chrom, start, end = split_genome_range(gr)
-        obs = self.adata.obs
-        obs = obs.loc[(obs.chrom==chrom) & (obs.start>=start) & (obs.end<=end),:]
-        data = obs.total.values
-        return data
-
-class SingleCellTrack(HistBase):
-
-    @classmethod
-    def pseudobulk(cls, frame, adata, groupby,
-                   palettes=sc.pl.palettes.vega_20_scanpy,
-                   **kwargs):
-        if groupby in adata.var.columns:
-            names = sorted(adata.var[groupby].unique().tolist())
-
-        colorname = groupby + '_colors'
-        if colorname not in adata.uns:
-            adata.uns[colorname] = palettes[:len(names)]
-
-        obs = adata.obs
-        max_value = obs.loc[:,[f'{groupby}_{name}' for name in names]].values.max()
-
-        for i, name in enumerate(names):
-
-            f = cls(obs, f'{groupby}_{name}', title=f'{name}',
-                    color=adata.uns[colorname][i],
-                    max_value=max_value,
-                    **kwargs) + TrackHeight(.5)
-            if frame is None:
-                frame = f
-            else:
-                frame += f
-            frame += HLine()
-        return frame
-
-
-    @classmethod
-    def selection(cls, frame, adata, selections,
-                   palettes=sc.pl.palettes.zeileis_28,
-                   **kwargs):
-        names = [k for k in selections]
-
-        colorname = 'selection_colors'
-        if colorname not in adata.uns:
-            adata.uns[colorname] = palettes[:len(names)]
-
-        obs = adata.obs.copy()
-        for i, name in enumerate(selections):
-            sadata = adata[:,adata.var.index.isin(selections[name])]
-            da = np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
-            obs.loc[:,name] = da
-
-        max_value = obs.loc[:,[name for name in selections]].values.max()
-        for i, name in enumerate(selections):
-            f = cls(obs, name, title=f'{name}',
-                    color=adata.uns[colorname][i],
-                    max_value=max_value,
-                    **kwargs) + TrackHeight(.9)
-            if frame is None:
-                frame = f
-            else:
-                frame += f
-            frame += HLine()
-        return frame
-
-
-    def __init__(self, obs, group, **kwargs):
-        properties = HistBase.DEFAULT_PROPERTIES.copy()
-        properties.update({
-            'type': properties['style'],
-            "file": 'dummy',
-            **kwargs,
-        })
-        super().__init__(**properties)
-        self.obs = obs
-        self.group = group
-
-    def fetch_data(self, gr, **kwargs):
-        chrom, start, end = split_genome_range(gr)
-        obs = self.obs
-        obs = obs.loc[(obs.chrom==chrom) & (obs.start>=start) & (obs.end<=end),self.group]
-        return obs.values
-
 
 
 
@@ -240,17 +128,15 @@ for groups in ADATA.var.columns:
         continue
     logging.debug(f'pre-compile {groups}')
     tracknames = sorted(ADATA.var[groups].unique().tolist())
-    #names
-    #data = np.zeros((len(names), adata.shape[0]))
     for i, track in enumerate(tracknames):
-
         sadata = ADATA[:,ADATA.var[groups]==track]
-
         ADATA.obs.loc[:, f'{groups}_{track}'] = \
-  np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
+                 np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
 
 logging.debug(f'CountMatrix: {ADATA}')
 print(repr(ADATA))
+print(""" scbrowser running .... """)
+
 ##############
 # instantiate app
 ##############
@@ -583,11 +469,11 @@ def embedding_callback(annot, selection_store, dragmode, session_id):
 
     return fig
 
+pool = Pool(10)
 
 @app.callback(
     Output(component_id="genome-track", component_property="src"),
     [
-        #Input(component_id="chrom-selector", component_property="value"),
         Input(component_id="locus-selector", component_property="value"),
         Input(component_id="annotation-selector", component_property="value"),
         Input(component_id="selection-store", component_property="data"),
@@ -602,26 +488,23 @@ def genome_tracks_callback(locus,
                    annotation, selectionstore, session_id):
     if locus is None:
         raise PreventUpdate
-    chrom, start, end = split_genome_range(locus)
-    #chrom, start, end = interval
-    frame = Frame(width=15, title=chrom, fontsize=5)
-    frame += XAxis(fontsize=7, title=chrom)
-    sada = ADATA[(ADATA.obs.chrom==chrom) & (ADATA.obs.start>=start) & (ADATA.obs.end<=end),:]
-    frame += AggregateTrack(sada, fontsize=5) + TrackHeight(.5) #+ Spacer(.1)
-    if annotation != "None":
-        frame = SingleCellTrack.pseudobulk(frame, sada, annotation, fontsize=5)
+
     if selectionstore is not None:
         selcells = get_cells(session_id, selectionstore[-1])
-        if selcells is not None:
-            frame = SingleCellTrack.selection(frame, sada, selcells, fontsize=5)
+    else:
+        selcells = None
 
-    frame += Spacer(.3)
-    frame += BED(genefile, title='Genes')
-    fig = frame.plot(f'{chrom}:{start}-{end}')
-    buf = io.BytesIO()
-    fig.savefig(buf, format = "png", bbox_inches = "tight", transparent=False)
-    data = base64.b64encode(buf.getbuffer()).decode("ascii")
-    return f"data:image/png;base64,{data}"
+    chrom, start, end = split_genome_range(locus)
+
+    sada = ADATA[(ADATA.obs.chrom==chrom) & (ADATA.obs.start>=start) & (ADATA.obs.end<=end),:].copy()
+    #return draw_figure((ADATA, locus, annotation, selcells, genefile))
+
+    ts = time.time()
+    print('using pool')
+    ret = pool.map(draw_figure, ((sada, locus, annotation, selcells, genefile),))
+    print(f'pool {time.time()-ts}')
+    return ret[0]
+    #print(ret)
 
 
 @app.callback(
@@ -728,113 +611,6 @@ def selection_store(selected, clicked, undolast, prev_hash, session_id):
     return new_hash
 
 
-#@app.callback(
-#    Output(component_id="stats-field", component_property="children"),
-#    [
-#        Input(component_id="chrom-selector", component_property="value"),
-#        Input(component_id="locus-selector", component_property="value"),
-#        Input(component_id="highlight-selector", component_property="value"),
-#        Input(component_id="annotation-selector", component_property="value"),
-#        Input(component_id="selection-store", component_property="data"),
-#    ],
-#    [
-#     State(component_id="session-id", component_property="data"),
-#    ],
-#)
-#@log_layer
-#def update_statistics(chrom, interval,
-#                      highlight, annotation,
-#                      selectionstore, session_id):
-#    if chrom is None:
-#        raise PreventUpdate
-#    if interval is None:
-#        raise PreventUpdate
-#
-#    start, end = interval
-#    regs_ = get_region_selection(chrom, interval, highlight)
-#
-#    regs_ = regs_[regs_.highlight == "inside"]
-#
-#    region_ids = regs_.index
-#
-#    tablemanager = TableManager(regs_)
-#
-#    if annotation != 'None':
-#        df = adata.var
-#        tracknames = sorted(df[annotation].unique().tolist())
-#
-#        for trackname in tracknames:
-#            sadata = adata[adata.obs.index.isin(region_ids), adata.var[annotation]==trackname]
-#            n11 = sadata.X.sum()
-#
-#            c1 = sadata.var['nFrags'].sum()
-#            r1 = sadata.obs['nFrags'].sum()
-#
-#            n = sadata.uns['nFrags']
-#            tablemanager.add_row(trackname, n11, c1, r1, n, sadata.shape[1])
-#
-#    if selectionstore is not None:
-#        # get cells from the cell selection store
-#        selcells = get_cells(session_id, selectionstore[-1])
-#        for k in selcells or []:
-#
-#            sadata = adata[adata.obs.index.isin(region_ids), adata.var.index.isin(selcells[k])]
-#            n11 = sadata.X.sum()
-#
-#            c1 = sadata.var['nFrags'].sum()
-#            r1 = sadata.obs['nFrags'].sum()
-#
-#            n = sadata.uns['nFrags']
-#            tablemanager.add_row(k, n11, c1, r1, n, sadata.shape[1])
-#
-#    tab = tablemanager.draw()
-#    return tab
-
-
-#@app.callback(
-#    Output(component_id="highlight-selector", component_property="value"),
-#    [
-#        Input(component_id="locus-selector", component_property="value"),
-#        #Input(component_id="genome-track", component_property="selectedData"),
-#    ],
-#)
-#@log_layer
-#def update_highlight_selector(interval):
-#    ctx = dash.callback_context
-#
-#    if ctx.triggered is None:
-#        raise PreventUpdate
-#
-#    if ctx.triggered[0]['prop_id'] == '.':
-#        #inital value
-#        return [25, 75]
-#
-#    if interval is None or selected is None:
-#        raise PreventUpdate
-#
-#    windowsize = interval[1] - interval[0]
-#    selected = interval[1] - interval[0]
-#
-#    if 'range' not in selected and 'lassoPoints' not in selected:
-#        raise PreventUpdate
-#    nums = None
-#    if 'range' in selected:
-#        for key in selected['range']:
-#            if 'x' in key:
-#                nums = [int(point) for point in selected['range'][key]]
-#    if 'lassoPoints' in selected:
-#        for key in selected['lassoPoints']:
-#            if 'x' in key:
-#                nums = [int(point) for point in selected['lassoPoints'][key]]
-#
-#    if nums is None:
-#        raise PreventUpdate
-#    ranges = [
-#        min(100, max(0, int((min(nums) - interval[0]) / windowsize * 100))),
-#        min(100, max(0, int((max(nums) - interval[0]) / windowsize * 100))),
-#    ]
-#    return ranges
-
 @app.callback(
     Output(component_id="dragmode-scatter", component_property="data"),
     [Input(component_id="scatter-plot", component_property="relayoutData"),
@@ -853,7 +629,7 @@ def main():
     ############
     # run server
     ############
-    app.run_server(debug=False, port=args['port'])
+    app.run_server(debug=True, port=args['port'])
 
 if __name__ == '__main__':
     main()
