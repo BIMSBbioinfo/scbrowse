@@ -75,8 +75,6 @@ setup(
         'pandas',
         'pybedtools>=0.8',
         'flask_caching',
-        'scregseg',
-        'pysam',
         'scanpy',
         # eg: 'aspectlib==1.1.1', 'six>=1.7',
     ],

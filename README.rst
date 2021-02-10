@@ -50,13 +50,6 @@ using conda
     conda create -n scbrowse python=3.7
     conda activate scbrowse
     conda install -c bioconda bedtools
-    conda install -c bioconda coolbox
-    conda install -c bioconda pyBigWig
-    conda install -c bioconda samtools
-
-    pip install janggu[tf]
-    pip install https://github.com/BIMSBbioinfo/scregseg/archive/master.zip
-
 
     git clone https://github.com/BIMSBbioinfo/scbrowse
     pip install -e scbrowse[gunicorn]
@@ -95,7 +88,10 @@ After preparation, the AnnData should look like this:
     array(['UMAP_all_cells'], dtype=object)
 
 
-Furthermore, to compile a countmatrix, consider using `scregseg make_tile`, `scregseg bam_to_counts` or `scregseg fragments_to_counts` as in the example below.
+Furthermore, to compile a countmatrix, consider using 
+`scregseg <http://github.com/BIMSBbioinfo/scregseg>`_.
+It offers functions for creating a countmatrix, including 
+`scregseg make_tile`, `scregseg bam_to_counts` or `scregseg fragments_to_counts` as in the example below.
 For example for a 1000 kp resolution countmatrix use:
 
 ::
