@@ -29,14 +29,15 @@ import dash_html_components as html  # pylint: disable=import-error
 import matplotlib.pyplot as plt
 import plotly.graph_objs as go  # pylint: disable=import-error
 import plotly.express as px
+
 from flask_caching import Cache
 from flask import Flask
 import hashlib
 import json
-from multiprocessing import Pool
-from scbrowse.utils import figure_encoder, draw_figure
+from multiprocessing import Pool, Process
+from scbrowse.utils import draw_figure
 import numpy as np
-from pybedtools import BedTool
+from pybedtools import BedTool, Interval
 
 from anndata import read_h5ad
 import scanpy as sc
@@ -45,6 +46,7 @@ import coolbox
 from coolbox.api import *
 from coolbox.utilities import split_genome_range
 from scbrowse.utils import SingleCellTrack
+from multiprocessing import Lock
 
 args = dict(matrix=os.environ['SCBROWSE_MATRIX'],
             genes=os.environ['SCBROWSE_GENES'],
@@ -93,6 +95,37 @@ logging.basicConfig(filename = args['logs'],
 logging.debug('scbrowse - startup')
 logging.debug(args)
 
+def load_dataset(h5file):
+    adata = read_h5ad(h5file)
+    adata.X.data[adata.X.data>0]=1
+
+
+    use_emb = adata.uns['embeddings'][0]
+    adata.var.loc[:, "nFrags"] = np.asarray(adata.X.sum(0)).flatten()
+    adata.obs.loc[:, "nFrags"] = np.asarray(adata.X.sum(1)).flatten()
+
+    adata.uns['nFrags'] = adata.var.nFrags.sum()
+
+
+    adata.obs.loc[:, "total"] = adata.obs.loc[:, "nFrags"]*1e5 / adata.uns['nFrags']
+
+    for groups in adata.var.columns:
+        if groups == 'nFrags':
+            continue
+        logging.debug(f'pre-compile {groups}')
+        tracknames = sorted(adata.var[groups].unique().tolist())
+        for i, track in enumerate(tracknames):
+            sadata = adata[:,adata.var[groups]==track]
+            adata.obs.loc[:, f'{groups}_{track}'] = \
+                     np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
+
+    logging.debug(f'CountMatrix: {adata}')
+    print(repr(adata))
+    return adata
+
+lock = Lock()
+
+
 ##############
 # load data
 ##############
@@ -102,39 +135,16 @@ genes = BedTool(args['genes'])
 
 logging.debug(f'Number of genes: {len(genes)}')
 
-ADATA = read_h5ad(args['matrix'])
-ADATA.X.data[ADATA.X.data>0]=1
-
-
+ADATA = load_dataset(args['matrix'])
 use_emb = ADATA.uns['embeddings'][0]
-ADATA.var.loc[:, "nFrags"] = np.asarray(ADATA.X.sum(0)).flatten()
-ADATA.obs.loc[:, "nFrags"] = np.asarray(ADATA.X.sum(1)).flatten()
-
-ADATA.uns['nFrags'] = ADATA.var.nFrags.sum()
-
-
-ADATA.obs.loc[:, "total"] = ADATA.obs.loc[:, "nFrags"]*1e5 / ADATA.uns['nFrags']
 chroms = ADATA.obs.chrom.unique().tolist()
 
-options = [dict(label=c, value=c) for c in chroms]
 chromlens = {c: ADATA.obs.query(f'chrom == "{c}"').end.max() for c in chroms}
 
 genelocus = [dict(label=g.name,
                   value=f'{g.chrom}:{max(1, g.start-10000)}-{min(chromlens[g.chrom], g.end+10000)}') for g in genes
              if g.chrom in chromlens]
 
-for groups in ADATA.var.columns:
-    if groups == 'nFrags':
-        continue
-    logging.debug(f'pre-compile {groups}')
-    tracknames = sorted(ADATA.var[groups].unique().tolist())
-    for i, track in enumerate(tracknames):
-        sadata = ADATA[:,ADATA.var[groups]==track]
-        ADATA.obs.loc[:, f'{groups}_{track}'] = \
-                 np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
-
-logging.debug(f'CountMatrix: {ADATA}')
-print(repr(ADATA))
 print(""" scbrowser running .... """)
 
 ##############
@@ -285,9 +295,13 @@ def make_server():
         ),
         html.Br(),
         html.Div(
-            [dcc.Graph(id="scatter-plot", style={'height': '500px'})],
-            style=dict(width="49%", display="inline-block", verticalAlign='top'),
-        id='divforscatter',),
+            [
+             dcc.Graph(id="scatter-plot", style={'height': '500px'})
+            ],
+            style=dict(width="49%",
+                       display="inline-block",
+                       verticalAlign='top'),
+            id='divforscatter',),
         html.Div(
             [
                 html.Img(id="genome-track", style=dict(verticalAlign='top')),
@@ -469,8 +483,6 @@ def embedding_callback(annot, selection_store, dragmode, session_id):
 
     return fig
 
-pool = Pool(10)
-
 @app.callback(
     Output(component_id="genome-track", component_property="src"),
     [
@@ -490,22 +502,20 @@ def genome_tracks_callback(locus,
         raise PreventUpdate
 
     if selectionstore is not None:
-        selcells = get_cells(session_id, selectionstore[-1])
+        selected_cells = get_cells(session_id, selectionstore[-1])
     else:
-        selcells = None
+        selected_cells = None
 
+    st=time.time()
+    print('start genome_tracks_callback')
     chrom, start, end = split_genome_range(locus)
 
     sada = ADATA[(ADATA.obs.chrom==chrom) & (ADATA.obs.start>=start) & (ADATA.obs.end<=end),:].copy()
-    #return draw_figure((ADATA, locus, annotation, selcells, genefile))
+    print(f'prefiltering: {time.time()-st}')
 
-    ts = time.time()
-    print('using pool')
-    ret = pool.map(draw_figure, ((sada, locus, annotation, selcells, genefile),))
-    print(f'pool {time.time()-ts}')
-    return ret[0]
-    #print(ret)
-
+    figstr = draw_figure((sada, locus, annotation, selected_cells, genefile, lock))
+    print(f'finalized figure: {time.time()-st}')
+    return figstr
 
 @app.callback(
     Output(component_id="locus-store", component_property="data"),
@@ -629,7 +639,7 @@ def main():
     ############
     # run server
     ############
-    app.run_server(debug=True, port=args['port'])
+    app.run_server(debug=False, port=args['port'])
 
 if __name__ == '__main__':
     main()

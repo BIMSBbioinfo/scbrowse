@@ -1,3 +1,4 @@
+import time
 import base64
 import io
 
@@ -5,6 +6,7 @@ import numpy as np
 from coolbox.api import *
 from coolbox.utilities import split_genome_range
 import scanpy as sc
+import matplotlib.pyplot as plt
 
 class SingleCellTrack(HistBase):
 
@@ -99,17 +101,10 @@ class SingleCellTrack(HistBase):
 
 
 
-def figure_encoder(inputs):
-    frame, coord = inputs
-    fig = frame.plot(coord)
-    buf = io.BytesIO()
-    fig.savefig(buf, format = "png", bbox_inches = "tight", transparent=False)
-    data = base64.b64encode(buf.getbuffer()).decode("ascii")
-    return f"data:image/png;base64,{data}"
-
 def draw_figure(inputs):
-    adata, locus, annotation, selcells, genefile = inputs
+    adata, locus, annotation, selcells, genefile, lock = inputs
 
+    st=time.time()
     chrom, start, end = split_genome_range(locus)
     frame = Frame(width=15, title=chrom, fontsize=5)
     frame += XAxis(fontsize=7, title=chrom)
@@ -124,8 +119,17 @@ def draw_figure(inputs):
 
     frame += Spacer(.3)
     frame += BED(genefile, title='Genes')
+    print(f'  finished preparation: {time.time() - st} ')
+    lock.acquire()
+    st=time.time()
     fig = frame.plot(f'{chrom}:{start}-{end}')
+    print(f'  finished plot: {time.time() - st} ')
+    st=time.time()
     buf = io.BytesIO()
-    fig.savefig(buf, format = "png", bbox_inches = "tight", transparent=False)
+    fig.savefig(buf, format = "png", bbox_inches = "tight")
+    plt.close(fig)
+    lock.release()
+    print(f'  finished savefig: {time.time() - st} ')
     data = base64.b64encode(buf.getbuffer()).decode("ascii")
     return f"data:image/png;base64,{data}"
+
