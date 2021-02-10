@@ -19,6 +19,7 @@ import time
 import base64
 import os
 from functools import wraps
+from collections import Counter
 from copy import copy
 import logging
 import dash  # pylint: disable=import-error
@@ -26,27 +27,20 @@ from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 import dash_core_components as dcc  # pylint: disable=import-error
 import dash_html_components as html  # pylint: disable=import-error
-import matplotlib.pyplot as plt
 import plotly.graph_objs as go  # pylint: disable=import-error
 import plotly.express as px
 
+from plotly.subplots import make_subplots
 from flask_caching import Cache
 from flask import Flask
 import hashlib
 import json
-from multiprocessing import Pool, Process
-from scbrowse.utils import draw_figure
 import numpy as np
 from pybedtools import BedTool, Interval
 
 from anndata import read_h5ad
 import scanpy as sc
 import uuid
-import coolbox
-from coolbox.api import *
-from coolbox.utilities import split_genome_range
-from scbrowse.utils import SingleCellTrack
-from multiprocessing import Lock
 
 args = dict(matrix=os.environ['SCBROWSE_MATRIX'],
             genes=os.environ['SCBROWSE_GENES'],
@@ -85,7 +79,10 @@ def log_layer(fn):
 
     return _log_wrapper
 
-
+def split_genome_range(gr):
+    chrom, rest = gr.split(':')
+    start, end = rest.split('-')
+    return chrom, int(start), int(end)
 
 logging.basicConfig(filename = args['logs'],
                     level=logging.DEBUG,
@@ -120,11 +117,262 @@ def load_dataset(h5file):
                      np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
 
     logging.debug(f'CountMatrix: {adata}')
-    print(repr(adata))
+    #print(repr(adata))
     return adata
 
-lock = Lock()
 
+class TrackManager:
+    def __init__(self, adata, locus, annotation, selected_cells, genes):
+        self.obs = adata.obs.copy()
+        self.tracknames = ["total"]
+        self.colnames = ["total"]
+        self.colors = {"total":"black"}
+
+        if annotation != "None":
+            #self.annotation = annotation
+            names = sorted(adata.var[annotation].unique().tolist())
+            colors = annotationcolors[:len(names)]
+            #self.tracknames = sorted(adata.var[annotation].unique())
+            for i, name in enumerate(names):
+                self.tracknames.append(name)
+                self.colors[name] = colors[i]
+                self.colnames.append(f'{annotation}_{name}')
+
+        if selected_cells is not None:
+            colors = selectioncolors[:len(selected_cells)]
+            for i, name in enumerate(selected_cells):
+                sadata = adata[:,adata.var.index.isin(selected_cells[name])]
+                da = np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
+                self.obs.loc[:,name] = da
+                self.tracknames.append(name)
+                self.colors[name] = colors[i]
+                self.colnames.append(f'{name}')
+
+
+        self.trackheight = 3
+        self.chrom, self.start, self.end = split_genome_range(locus)
+        self.locus = [self.chrom, self.start,self.end]
+        self.genes = genes
+
+        self.init_trace()
+
+    def allocate(self):
+
+        ntracks = len(self.tracknames)
+        specs=[]
+        for n in range(ntracks):
+            specs += [[{"rowspan": self.trackheight}]]
+            specs += [[None]]*(self.trackheight - 1)
+        specs += [[{"rowspan": 10}]]
+        specs += [[None]]*(10 - 1)
+
+        fig = make_subplots(
+            rows=ntracks * self.trackheight + 10,
+            cols=1,
+            specs=specs,
+            shared_xaxes=True,
+            vertical_spacing=0.00,
+        )
+        fig.update_xaxes(range=[self.start, self.end])
+        return fig
+
+    def draw_track(self):
+        plobjs = []
+        sregs_ = self.obs
+        plobjs.append(go.Scatter(x=sregs_.start,
+                                 y=sregs_[self.colnames[self.itrack]],
+                                 marker=dict(color=self.colors[self.tracknames[self.itrack]]),
+                                 mode="lines", name=self.tracknames[self.itrack],))
+        self.ymax = max(self.ymax, sregs_[self.colnames[self.itrack]].max())
+
+        return plobjs
+
+    def init_trace(self):
+        self.itrace = 1
+        self.itrack = 0
+        self.ymax = 0.0
+
+    def next_trace(self):
+        self.itrace += self.trackheight
+        self.itrack += 1
+
+    def extend_trace(self, fig, plobjs):
+        for plobj in plobjs:
+            fig.add_trace(plobj, row=self.itrace, col=1)
+        return fig
+
+    def draw_tracks(self, fig):
+        for i, trackname in enumerate(self.tracknames):
+            self.extend_trace(fig, self.draw_track())
+            self.next_trace()
+
+        return fig
+
+    def draw(self):
+        fig = self.allocate()
+        self.init_trace()
+        fig = self.draw_tracks(fig)
+
+        title = f"Window: {self.locus[0]}:{self.locus[1]}-{self.locus[2]}"
+        fig.layout.update(
+            dict(title=title,
+                 clickmode='none',
+                 template="plotly_white")
+        )
+        for prop in fig.layout:
+            if 'yaxis' in prop:
+                fig.layout[prop]["range"] = [0,self.ymax]
+
+        fig = self.draw_annotation(fig)
+        fig.layout[f'yaxis{self.itrack+1}']["range"] = [0,4.]
+
+        for prop in fig.layout:
+            if 'xaxis' in prop:
+                fig.layout[prop]["showgrid"] = False
+                fig.layout[prop]["zeroline"] = False
+                fig.layout[prop]["fixedrange"] = True
+                fig.layout[prop]["range"] = [self.start, self.end]
+                fig.layout[prop]["showticklabels"] = False
+            if 'yaxis' in prop:
+                fig.layout[prop]["showgrid"] = False
+                fig.layout[prop]["zeroline"] = False
+                fig.layout[prop]["fixedrange"] = True
+        fig.layout[f"xaxis"]["side"] = "top"
+        fig.layout[f"xaxis"]["showticklabels"] = True
+        return fig
+
+    def draw_annotation(self, fig):
+        ntracks = len(self.tracknames)
+        chrom, start, end = self.locus
+        plobjs = _draw_gene_annotation(fig, self.genes, chrom, start, end)
+        for plobj in plobjs or []:
+            fig.add_trace(
+                plobj,
+                row=ntracks*self.trackheight + 1,
+                col=1,
+            )
+        if plobjs is not None:
+            fig.layout[f"yaxis{ntracks+1}"]["showticklabels"] = False
+            fig.layout[f"yaxis{ntracks+1}"]["showgrid"] = False
+            fig.layout[f"yaxis{ntracks+1}"]["zeroline"] = False
+            fig.layout[f"xaxis{ntracks+1}"]["showgrid"] = False
+            fig.layout[f"xaxis{ntracks+1}"]["zeroline"] = False
+        return fig
+
+
+def draw_box(yoffset, start, end, height=0.1):
+    xs = [
+        start,
+        start,
+        end,
+        end,
+        start,
+        None,
+    ]
+    ys = [yoffset, yoffset+height, yoffset+height, yoffset, yoffset, None]
+    return xs, ys
+
+def draw_right_arrow_box(yoffset, start, end, height=0.1):
+    xs = [
+        start,
+        start,
+        max(start, end-5000),
+        end,
+        max(start,end-5000),
+        start,
+        None,
+    ]
+    ys = [yoffset, yoffset+height, yoffset+height, yoffset + height*.5, yoffset, yoffset, None]
+    return xs, ys
+
+def draw_left_arrow_box(yoffset, start, end, height=0.1):
+    xs = [
+        start,
+        min(start + 5000, end),
+        end,
+        end,
+        min(start + 5000, end),
+        start,
+        None,
+    ]
+    ys = [yoffset +height*.5, yoffset, yoffset, yoffset + height, yoffset +height, yoffset + height*.5, None]
+    return xs, ys
+
+
+def draw_gene(yoffset, gene):
+    return draw_simple_gene(yoffset, gene)
+
+def draw_simple_gene(yoffset, gene):
+    if gene.strand == "-":
+        return draw_left_arrow_box(yoffset, gene.start, gene.end)
+    else:
+        return draw_right_arrow_box(yoffset, gene.start, gene.end)
+
+def _draw_gene_annotation(fig, genes, chrom, start, end):
+    wbed = BedTool([Interval(chrom, start, end)])
+    regions = genes.intersect(wbed, wa=True, u=True)
+    xs = []
+    ys = []
+
+    textxpos = []
+    textypos = []
+    names = []
+    offset = 3.5-.07
+    prevends = 0
+
+    rangeannot = []
+    for i, region in enumerate(regions):
+        names.append(region.name)
+
+        #if region.start >= (prevends +10000):
+        #    offset = 3.5-.07
+
+        x, y = draw_gene(offset, region)
+        xs +=x
+        ys +=y
+        textxpos.append(region.end+500)
+        textypos.append(offset)
+        rangeannot.append(f"{region.chrom}:{region.start}-{region.end};{region.strand}")
+
+        prevends = max(prevends, region.end)
+        offset -= 0.2
+        if offset <= 0.0:
+            offset=3.5-0.07
+
+
+    if len(textxpos) > 0:
+        plobjs = [
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                fill="toself",
+                name="Genes",
+                marker=dict(color="goldenrod"),
+            ),
+            go.Scatter(
+                x=textxpos,
+                y=textypos,
+                text=names,
+                mode="text",
+                #opacity=0.0,
+                name="Genes",
+                customdata=rangeannot,
+                hovertemplate="%{text}<br>%{customdata}",
+                showlegend=False,
+            ),
+            #go.Scatter(
+            #    x=xs,
+            #    y=ys,
+            #    mode="lines",
+            #    #fill="toself",
+            #    #name="Genes",
+            #    #marker=dict(color="black"),
+            #    line=dict(color='black', width=.1),
+            #    showlegend=False,
+            #),
+        ]
+        return plobjs
 
 ##############
 # load data
@@ -206,7 +454,7 @@ def make_server():
                         for name in ADATA.var.columns if name != 'nFrags'
                     ]
                     + [{"label": "None", "value": "None"}],
-                    value="None",
+                    value="cell_label",
                     style=dict(width="40%", display="inline-block"),
                 ),
                 html.Button('Clear all selections',
@@ -296,7 +544,8 @@ def make_server():
         html.Br(),
         html.Div(
             [
-             dcc.Graph(id="scatter-plot", style={'height': '500px'})
+             dcc.Graph(id="scatter-plot", style={'height': '500px'}),
+             html.P("Tip: Select cells in the embedding manually using the box or lasso selection tool.")
             ],
             style=dict(width="49%",
                        display="inline-block",
@@ -304,7 +553,8 @@ def make_server():
             id='divforscatter',),
         html.Div(
             [
-                html.Img(id="genome-track", style=dict(verticalAlign='top')),
+                dcc.Graph(id="ply-genome-track", style={'height': '500px'},
+                          config={'displayModeBar': False})
             ], id='divforgenome',
             style=dict(width="49%", display="inline-block"),
         ),
@@ -484,7 +734,7 @@ def embedding_callback(annot, selection_store, dragmode, session_id):
     return fig
 
 @app.callback(
-    Output(component_id="genome-track", component_property="src"),
+    Output(component_id="ply-genome-track", component_property="figure"),
     [
         Input(component_id="locus-selector", component_property="value"),
         Input(component_id="annotation-selector", component_property="value"),
@@ -495,9 +745,8 @@ def embedding_callback(annot, selection_store, dragmode, session_id):
     ],
 )
 @log_layer
-def genome_tracks_callback(locus,
-                   #highlight, overlay,
-                   annotation, selectionstore, session_id):
+def ply_genome_tracks_callback(locus,
+                               annotation, selectionstore, session_id):
     if locus is None:
         raise PreventUpdate
 
@@ -507,15 +756,15 @@ def genome_tracks_callback(locus,
         selected_cells = None
 
     st=time.time()
-    print('start genome_tracks_callback')
     chrom, start, end = split_genome_range(locus)
 
     sada = ADATA[(ADATA.obs.chrom==chrom) & (ADATA.obs.start>=start) & (ADATA.obs.end<=end),:].copy()
-    print(f'prefiltering: {time.time()-st}')
 
-    figstr = draw_figure((sada, locus, annotation, selected_cells, genefile, lock))
-    print(f'finalized figure: {time.time()-st}')
-    return figstr
+    obs = sada.obs
+    tracks = TrackManager(sada, locus, annotation, selected_cells, genes)
+    fig = tracks.draw()
+    return fig
+
 
 @app.callback(
     Output(component_id="locus-store", component_property="data"),
