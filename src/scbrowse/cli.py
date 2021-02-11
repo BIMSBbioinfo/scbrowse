@@ -545,7 +545,12 @@ def make_server():
         html.Div(
             [
              dcc.Graph(id="scatter-plot", style={'height': '500px'}),
-             html.P("Tip: Select cells in the embedding manually using the box or lasso selection tool.")
+             html.P("Tip: Select cells in the embedding manually using the box or lasso selection tool."),
+             html.P(["Source code: ",
+                     html.A("scbrowse",
+                     href="https://github.com/BIMSBbioinfo/scbrowse"),
+                    ]
+                   ),
             ],
             style=dict(width="49%",
                        display="inline-block",
