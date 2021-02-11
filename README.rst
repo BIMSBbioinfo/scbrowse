@@ -7,11 +7,14 @@ It allows to simultaneously explore the accessibility patterns
 of selected cells in the embedding space and for selected genomic regions.
 The tools freely available under a GNU Lesser General Public License v3 or later (LGPLv3+).
 
+.. image:: screenshot.png
+
+
 Example
 ==========
 
-.. image:: screenshot.png
-
+A live example showing Zebrafish embryo scATAC-seq data is available at `scbrowse.mdc-berlin.de <http://scbrowse.mdc-berlin.de>`_
+with data from McGarvey, Kopp, Vučićević, et al. biorxiv 2020.
 
 
 How can I select cells?
@@ -136,4 +139,5 @@ Then run
 
 and open the scbrowse in a web browser at
 https://localhost:8000
+
 
