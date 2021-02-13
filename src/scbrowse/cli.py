@@ -184,7 +184,8 @@ class TrackManager:
         sregs_ = self.obs
         plobjs.append(go.Scatter(x=sregs_.start,
                                  y=sregs_[self.colnames[self.itrack]],
-                                 marker=dict(color=self.colors[self.tracknames[self.itrack]]),
+                                 line=dict(width=0.1, color=self.colors[self.tracknames[self.itrack]]),
+                                 fill='tozeroy',
                                  mode="lines", name=self.tracknames[self.itrack],))
         self.ymax = max(self.ymax, sregs_[self.colnames[self.itrack]].max())
 
