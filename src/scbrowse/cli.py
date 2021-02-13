@@ -413,11 +413,11 @@ cache = Cache(app.server, config={
     # Note that filesystem cache doesn't work on systems with ephemeral
     # filesystems like Heroku.
     'CACHE_TYPE': 'filesystem',
-    'CACHE_DIR': 'cache-directory',
+    'CACHE_DIR': '/home/sa-l-scbrowse/data/cache-directory',
 
     # should be equal to maximum number of users on the app at a single time
     # higher numbers will store more data in the filesystem / redis cache
-    'CACHE_THRESHOLD': 50
+    'CACHE_THRESHOLD': 500
 })
 
 def get_cells(session_id, datahash, data=None):
