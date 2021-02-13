@@ -115,7 +115,6 @@ def load_dataset(h5file):
                      np.asarray(sadata.X.sum(1)).flatten() *1e5 / sadata.var.nFrags.sum()
 
     logging.debug(f'CountMatrix: {adata}')
-    #print(repr(adata))
     return adata
 
 
@@ -130,9 +129,9 @@ class TrackManager:
             #self.annotation = annotation
             #names = sorted(adata.var[annotation].unique().tolist())
             names = TRACKNAMES[annotation]
-            colors = annotationcolors[:len(names)]
+            colors = annotationcolors[:len(TRACKNAMES[annotation])]
             #self.tracknames = sorted(adata.var[annotation].unique())
-            for i, name in enumerate(names):
+            for i, name in enumerate(TRACKNAMES[annotation]):
                 self.tracknames.append(name)
                 self.colors[name] = colors[i]
                 self.colnames.append(f'{annotation}_{name}')
@@ -146,7 +145,6 @@ class TrackManager:
                 self.tracknames.append(name)
                 self.colors[name] = colors[i]
                 self.colnames.append(f'{name}')
-
 
         self.trackheight = 3
         self.chrom, self.start, self.end = split_genome_range(locus)
@@ -691,7 +689,7 @@ def update_locus_selector_value(gcoord,zi15,zi5,zi10,zo15,zo5,zo10,ml1,ml2,ml3,m
 @log_layer
 def embedding_callback(annot, selection_store, dragmode, session_id):
     co = {}
-    tracknames = TRACKNAMES[annot]
+    tracknames = copy(TRACKNAMES[annot])
 
     colors = {trackname: annotationcolors[i%len(annotationcolors)] for i, \
               trackname in enumerate(tracknames)}
@@ -845,7 +843,7 @@ def selection_store(selected, clicked, undolast, prev_hash, session_id):
         prev_cells = dict()
         prev_selection = dict()
 
-    selname = f'sel_{len(prev_cells)}'
+    selname = f'selection_{len(prev_cells)}'
     # got some new selected points
     sel = [point["customdata"][0] for point in selected["points"]]
     cell_ids = {selname:
