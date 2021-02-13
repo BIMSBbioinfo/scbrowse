@@ -552,10 +552,16 @@ def make_server():
         html.Div(
             [
              dcc.Graph(id="scatter-plot", style={'height': '500px'}),
-             html.P("Tip: Select cells in the embedding manually using the box or lasso selection tool."),
+             html.P("Tip: Inspect genome browser tracks of manually selected "
+                    " using the box or lasso selection tool."),
              html.P(["Source code: ",
                      html.A("scbrowse",
                      href="https://github.com/BIMSBbioinfo/scbrowse"),
+                    ]
+                   ),
+             html.P(["Manuscript: ",
+                     html.A("Biorxiv",
+                     href="https://doi.org/10.1101/2020.06.26.173377"),
                     ]
                    ),
             ],
