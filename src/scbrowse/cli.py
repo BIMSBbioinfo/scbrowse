@@ -99,8 +99,6 @@ def load_dataset(h5file):
     adata = read_h5ad(h5file)
     adata.X.data[adata.X.data>0]=1
 
-
-    use_emb = adata.uns['embeddings'][0]
     adata.var.loc[:, "nFrags"] = np.asarray(adata.X.sum(0)).flatten()
     adata.obs.loc[:, "nFrags"] = np.asarray(adata.X.sum(1)).flatten()
 
@@ -133,7 +131,8 @@ class TrackManager:
 
         if annotation != "None":
             #self.annotation = annotation
-            names = sorted(adata.var[annotation].unique().tolist())
+            #names = sorted(adata.var[annotation].unique().tolist())
+            names = TRACKNAMES[annotation]
             colors = annotationcolors[:len(names)]
             #self.tracknames = sorted(adata.var[annotation].unique())
             for i, name in enumerate(names):
@@ -392,6 +391,15 @@ use_emb = ADATA.uns['embeddings'][0]
 chroms = ADATA.obs.chrom.unique().tolist()
 
 chromlens = {c: ADATA.obs.query(f'chrom == "{c}"').end.max() for c in chroms}
+ANNOTATION = [name for name in ADATA.var.columns if name != 'nFrags']
+
+TRACKNAMES = {}
+
+for annot in ANNOTATION:
+    TRACKNAMES[annot] = sorted(ADATA.var[annot].unique().tolist())
+
+TRACKNAMES['None'] = ['None']
+ADATA_subs = {chrom: ADATA[ADATA.obs.chrom==chrom,:] for chrom in chroms}
 
 genelocus = [dict(label=g.name,
                   value=f'{g.chrom}:{max(1, g.start-10000)}-{min(chromlens[g.chrom], g.end+10000)}') for g in genes
@@ -455,7 +463,7 @@ def make_server():
                     id="annotation-selector",
                     options=[
                         {"label": name, "value": name}
-                        for name in ADATA.var.columns if name != 'nFrags'
+                        for name in ANNOTATION
                     ]
                     + [{"label": "None", "value": "None"}],
                     value="cell_label",
@@ -686,10 +694,7 @@ def update_locus_selector_value(gcoord,zi15,zi5,zi10,zo15,zo5,zo10,ml1,ml2,ml3,m
 @log_layer
 def embedding_callback(annot, selection_store, dragmode, session_id):
     co = {}
-    if annot in ADATA.var.columns:
-        tracknames = sorted(ADATA.var[annot].unique().tolist())
-    else:
-        tracknames = ['None']
+    tracknames = TRACKNAMES[annot]
 
     colors = {trackname: annotationcolors[i%len(annotationcolors)] for i, \
               trackname in enumerate(tracknames)}
@@ -767,9 +772,10 @@ def ply_genome_tracks_callback(locus,
     st=time.time()
     chrom, start, end = split_genome_range(locus)
 
-    sada = ADATA[(ADATA.obs.chrom==chrom) & (ADATA.obs.start>=start) & (ADATA.obs.end<=end),:].copy()
+    sada = ADATA_subs[chrom]
+    sada = sada[(sada.obs.start>=start) & (sada.obs.end<=end),:].copy()
 
-    obs = sada.obs
+    #obs = sada.obs
     tracks = TrackManager(sada, locus, annotation, selected_cells, genes)
     fig = tracks.draw()
     return fig
