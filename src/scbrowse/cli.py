@@ -552,7 +552,7 @@ def make_server():
         html.Div(
             [
              dcc.Graph(id="scatter-plot", style={'height': '500px'}),
-             html.P("Tip: Inspect genome browser tracks of manually selected "
+             html.P("Tip: Inspect genome browser tracks of manually selected cells"
                     " using the box or lasso selection tool."),
              html.P(["Source code: ",
                      html.A("scbrowse",
