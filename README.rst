@@ -24,7 +24,7 @@ It is possible to select cells manually by selecting the "Lasso select" or "Box 
 in the navigation bar above the embedding scatterplot.
 As a result, the area underneigth the selection will appear highlighted.
 
-Can I select multipe cell populations?
+Can I select multiple cell populations?
 --------------------------------------
 Yes.
 
